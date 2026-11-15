@@ -51,6 +51,11 @@ class DB:
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
         self.conn.execute("PRAGMA synchronous=NORMAL")
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(stations)")}
+        if "relay" not in cols:
+            self.conn.execute("ALTER TABLE stations ADD COLUMN relay TEXT DEFAULT '{}'")
+        if "pushes" not in cols:
+            self.conn.execute("ALTER TABLE stations ADD COLUMN pushes TEXT DEFAULT '[]'")
 
     def exec(self, sql, args=()):
         with self.lock:
@@ -85,14 +90,19 @@ class DB:
     def stations(self):
         rows = self.all("SELECT * FROM stations ORDER BY id")
         for r in rows:
-            r["outputs"] = json.loads(r["outputs"] or "[]")
+            self._decode(r)
         return rows
+
+    @staticmethod
+    def _decode(r):
+        r["outputs"] = json.loads(r.get("outputs") or "[]")
+        r["relay"] = json.loads(r.get("relay") or "{}")
+        r["pushes"] = json.loads(r.get("pushes") or "[]")
+        return r
 
     def station(self, sid):
         r = self.one("SELECT * FROM stations WHERE id=?", (sid,))
-        if r:
-            r["outputs"] = json.loads(r["outputs"] or "[]")
-        return r
+        return self._decode(r) if r else None
 
     def close_dangling_sessions(self):
         """la pornire: închide sesiunile rămase deschise după un restart/crash"""

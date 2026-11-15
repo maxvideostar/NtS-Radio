@@ -3,7 +3,9 @@
 Server de streaming pentru radio (tip SHOUTcast / Icecast), cu AutoDJ, panou de administrare și pagină de statistici pentru managerul postului.
 
 - **Surse live din studio:** Icecast (SOURCE/PUT) și SHOUTcast v1. Merge cu RadioBOSS, SAM Broadcaster, Mixxx, BUTT, mixere cu encoder etc.
-- **Comutare automată:** studio live → AutoDJ → liniște. Ascultătorii nu sunt deconectați la comutare.
+- **Comutare automată:** studio live → relay → AutoDJ → liniște. Ascultătorii nu sunt deconectați la comutare.
+- **Relay de intrare:** preia un post extern (Icecast/SHOUTcast, .pls/.m3u, HLS .m3u8), cu titlurile pieselor, ca post întreg sau ca rezervă (studio → relay → AutoDJ), permanent sau pe intervale orare.
+- **Relay de ieșire:** retransmite postul automat către alte servere Icecast / SHOUTcast sau RTMP (YouTube / Facebook, cu logo), cu reconectare automată.
 - **AutoDJ:** shuffle, crossfade, jingle-uri la fiecare N piese, upload din browser.
 - **Detectare liniște:** dacă studioul e conectat, dar nu se aude nimic N secunde, trece pe AutoDJ.
 - **Ieșiri multiple:** MP3 / AAC la orice bitrate, cu metadate ICY (titlul piesei în player).

@@ -89,6 +89,7 @@ function countryName(cc) {
 const WD = ["Lun", "Mar", "Mie", "Joi", "Vin", "Sâm", "Dum"];
 const WD_FULL = ["Luni", "Marți", "Miercuri", "Joi", "Vineri", "Sâmbătă", "Duminică"];
 const modeBadge = m => m === "live" ? `<span class="badge live">LIVE din studio</span>` :
+  m === "relay" ? `<span class="badge relay">Relay</span>` :
   m === "autodj" ? `<span class="badge autodj">AutoDJ</span>` : `<span class="badge off">Oprit / liniște</span>`;
 
 /* ---------- grafice (SVG, o singură serie, tooltip la hover) ---------- */

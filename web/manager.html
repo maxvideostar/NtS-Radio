@@ -179,11 +179,12 @@ async function loadLive() {
   $("#live-mode").innerHTML = modeBadge(d.mode);
   $("#live-title").textContent = d.title || "—";
   $("#live-studio").textContent = d.mode === "live" && d.live_since ? `Emisie live din studio de ${fmtDur(Date.now() / 1000 - d.live_since)}` :
+    d.mode === "relay" ? "Se retransmite un post partener (relay)." :
     d.mode === "autodj" ? "Studioul nu emite acum – rulează AutoDJ (muzică automată)." : "";
   const pts = d.recent.map(r => ({t: r.ts, v: r.listeners}));
   pts.push({t: Math.floor(Date.now() / 1000), v: d.listeners});
   lineChart($("#live-chart"), pts, {fmtX: fmtTime, fmtTip: fmtTime, unit: "ascultători", height: 180, name: "Ascultători ultimele 3 ore"});
-  $("#live-songs").innerHTML = d.songs.map(s => `<div><span class="t">${fmtTime(s.ts)}</span><span style="flex:1">${esc(s.title)}${s.source === "live" ? ' <span class="badge live" style="font-size:10px;padding:1px 6px">live</span>' : ""}</span><span class="muted small">${s.listeners}</span></div>`).join("") || `<div class="muted">—</div>`;
+  $("#live-songs").innerHTML = d.songs.map(s => `<div><span class="t">${fmtTime(s.ts)}</span><span style="flex:1">${esc(s.title)}${s.source === "live" ? ' <span class="badge live" style="font-size:10px;padding:1px 6px">live</span>' : s.source === "relay" ? ' <span class="badge relay" style="font-size:10px;padding:1px 6px">relay</span>' : ""}</span><span class="muted small">${s.listeners}</span></div>`).join("") || `<div class="muted">—</div>`;
   barList($("#live-cc"), (d.countries || []).slice(0, 10).map(([c, n]) => ({label: countryName(c), html: `${flag(c)} ${esc(countryName(c))}`, value: n})));
   barList($("#live-dev"), (d.devices || []).map(([k, n]) => ({label: k, value: n})));
 }
@@ -224,7 +225,7 @@ $("#h-more").onclick = () => { hOffset += 200; loadHistory(true); };
 async function loadHistory(append) {
   const d = await api("GET", `/api/station/${SID}/songs?${qs()}&offset=${hOffset}&q=${encodeURIComponent($("#h-q").value)}`);
   $("#h-total").textContent = `(${fmtN(d.total)})`;
-  const html = d.rows.map(s => `<tr><td class="nowrap">${P.to - P.from > 86400 ? fmtDT(s.ts) : fmtTime(s.ts)}</td><td>${esc(s.title)}</td><td>${s.source === "live" ? '<span class="badge live">live</span>' : s.source === "autodj" ? '<span class="badge autodj">AutoDJ</span>' : '<span class="badge off">—</span>'}</td><td class="num">${s.listeners}</td></tr>`).join("");
+  const html = d.rows.map(s => `<tr><td class="nowrap">${P.to - P.from > 86400 ? fmtDT(s.ts) : fmtTime(s.ts)}</td><td>${esc(s.title)}</td><td>${s.source === "live" ? '<span class="badge live">live</span>' : s.source === "relay" ? '<span class="badge relay">relay</span>' : s.source === "autodj" ? '<span class="badge autodj">AutoDJ</span>' : '<span class="badge off">—</span>'}</td><td class="num">${s.listeners}</td></tr>`).join("");
   if (append) $("#h-list").insertAdjacentHTML("beforeend", html);
   else $("#h-list").innerHTML = html || `<tr><td colspan="4" class="empty">Nicio piesă în această perioadă.</td></tr>`;
   $("#h-more").classList.toggle("hidden", hOffset + 200 >= d.total);

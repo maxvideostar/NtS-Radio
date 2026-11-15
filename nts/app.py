@@ -785,6 +785,50 @@ class Radio:
         if not clean:
             raise HTTPError(400, "Cel puțin o ieșire")
 
+        # ---- relay de intrare ----
+        rin = d.get("relay", e.get("relay")) or {}
+        rurl = (rin.get("url") or "").strip()
+        if rurl and not re.match(r"^https?://", rurl, re.I):
+            raise HTTPError(400, "Adresa relay trebuie să înceapă cu http:// sau https://")
+        if rin.get("enabled") and not rurl:
+            raise HTTPError(400, "Completează adresa stream-ului pentru relay")
+        sched = []
+        for it in rin.get("schedule") or []:
+            days = sorted({int(x) for x in it.get("days") or [] if 1 <= int(x) <= 7})
+            st_, en_ = it.get("start", ""), it.get("end", "")
+            if not days or not re.fullmatch(r"\d{2}:\d{2}", st_) or not re.fullmatch(r"\d{2}:\d{2}", en_):
+                raise HTTPError(400, "Program relay: alege zilele și orele (HH:MM)")
+            sched.append({"days": days, "start": st_, "end": en_})
+        relay = {"enabled": 1 if rin.get("enabled") else 0, "url": rurl, "schedule": sched}
+        # ---- retransmisii (relay de ieșire) ----
+        pushes = []
+        suffixes = {o["mount"] for o in clean}
+        for pc in d.get("pushes", e.get("pushes")) or []:
+            t = pc.get("type")
+            if t not in ("icecast", "shoutcast", "rtmp"):
+                raise HTTPError(400, "Tip retransmisie invalid")
+            item = {"name": (pc.get("name") or "").strip()[:60], "type": t, "enabled": 1 if pc.get("enabled", 1) else 0,
+                    "output": pc.get("output") if pc.get("output") in suffixes else clean[0]["mount"]}
+            if t == "rtmp":
+                url = (pc.get("url") or "").strip()
+                if not re.match(r"^rtmps?://", url, re.I):
+                    raise HTTPError(400, "Adresa RTMP trebuie să înceapă cu rtmp:// sau rtmps://")
+                item.update({"url": url, "key": (pc.get("key") or "").strip(), "video": 1 if pc.get("video", 1) else 0})
+            else:
+                host = (pc.get("host") or "").strip()
+                if not host:
+                    raise HTTPError(400, "Retransmisie: completează serverul destinație")
+                try:
+                    port = int(pc.get("port") or 8000)
+                except ValueError:
+                    raise HTTPError(400, "Port invalid")
+                item.update({"host": host, "port": port, "password": pc.get("password") or "",
+                             "tls": 1 if pc.get("tls") else 0})
+                if t == "icecast":
+                    item.update({"mount": "/" + (pc.get("mount") or "stream").strip().lstrip("/"),
+                                 "user": (pc.get("user") or "source").strip()})
+            pushes.append(item)
+
         def g(k, default, typ=int):
             v = d.get(k, e.get(k, default))
             try:
@@ -798,7 +842,7 @@ class Radio:
                 "autodj": 1 if g("autodj", 1) else 0, "shuffle": 1 if g("shuffle", 1) else 0,
                 "crossfade": max(0.0, min(10.0, g("crossfade", 3, float))),
                 "jingle_every": max(0, g("jingle_every", 4)), "silence_secs": max(0, g("silence_secs", 0)),
-                "outputs": clean}
+                "outputs": clean, "relay": relay, "pushes": pushes}
 
     async def api_admin(self, req, seg):
         m, w = req.method, req.writer
@@ -813,10 +857,12 @@ class Radio:
                 d = self.station_payload(await req.json())
                 sid = self.db.exec(
                     "INSERT INTO stations(slug,name,genre,description,website,source_pass,max_listeners,enabled,autodj,"
-                    "shuffle,crossfade,jingle_every,silence_secs,outputs,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "shuffle,crossfade,jingle_every,silence_secs,outputs,relay,pushes,created) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (d["slug"], d["name"], d["genre"], d["description"], d["website"], d["source_pass"],
                      d["max_listeners"], d["enabled"], d["autodj"], d["shuffle"], d["crossfade"], d["jingle_every"],
-                     d["silence_secs"], json.dumps(d["outputs"]), now()))
+                     d["silence_secs"], json.dumps(d["outputs"]), json.dumps(d["relay"]), json.dumps(d["pushes"]),
+                     now()))
                 if d["enabled"]:
                     await self.start_station(self.db.station(sid))
                 self.db.event(sid, "config", "post creat")
@@ -840,10 +886,11 @@ class Radio:
                         os.rename(old, new)
                 self.db.exec("UPDATE stations SET slug=?,name=?,genre=?,description=?,website=?,source_pass=?,"
                              "max_listeners=?,enabled=?,autodj=?,shuffle=?,crossfade=?,jingle_every=?,silence_secs=?,"
-                             "outputs=? WHERE id=?",
+                             "outputs=?,relay=?,pushes=? WHERE id=?",
                              (d["slug"], d["name"], d["genre"], d["description"], d["website"], d["source_pass"],
                               d["max_listeners"], d["enabled"], d["autodj"], d["shuffle"], d["crossfade"],
-                              d["jingle_every"], d["silence_secs"], json.dumps(d["outputs"]), sid))
+                              d["jingle_every"], d["silence_secs"], json.dumps(d["outputs"]), json.dumps(d["relay"]),
+                              json.dumps(d["pushes"]), sid))
                 new_cfg = self.db.station(sid)
                 restart = (st is not None) != bool(new_cfg["enabled"]) or (st and (
                     new_cfg["outputs"] != cfg["outputs"] or new_cfg["slug"] != cfg["slug"]))
@@ -852,7 +899,7 @@ class Radio:
                     if new_cfg["enabled"]:
                         await self.start_station(new_cfg)
                 elif st:
-                    st.cfg = new_cfg
+                    await st.apply_cfg(new_cfg)
                     if st.live and new_cfg["source_pass"] != cfg["source_pass"]:
                         st.live.kicked = True
                         await st.live.close()

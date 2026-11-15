@@ -10,6 +10,11 @@
 .drop.over{border-color:var(--accent);color:var(--text-primary)}
 .prog{height:4px;background:var(--surface-3);border-radius:2px;overflow:hidden;margin-top:8px}.prog div{height:100%;background:var(--accent);width:0}
 .studio-box td{padding:6px 8px}
+.sub-box{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px}
+.sched-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.sched-row .days label{display:inline-flex;gap:3px;align-items:center;margin-right:6px;font-size:12px;color:var(--text-secondary)}
+.push-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+@media(max-width:700px){.push-grid{grid-template-columns:1fr 1fr}}
 </style></head>
 <body>
 <div class="topbar">
@@ -34,7 +39,7 @@
 
   <section id="t-stations" class="hidden">
     <div class="card"><div class="card-head"><h2>Posturi de radio</h2><button class="btn primary" id="addSt">+ Post nou</button></div>
-      <div class="table-wrap"><table><thead><tr><th>Nume</th><th>Mount</th><th>Ieșiri</th><th>Stare</th><th>AutoDJ</th><th></th></tr></thead><tbody id="st-list"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Nume</th><th>Mount</th><th>Ieșiri</th><th>Stare</th><th>Surse</th><th></th></tr></thead><tbody id="st-list"></tbody></table></div>
     </div>
   </section>
 
@@ -159,6 +164,8 @@ async function loadDash() {
       <div class="meta">
         <div>Studio</div><div>${L ? `<span class="badge ok">conectat</span> ${esc(L.ip)} · ${esc(L.agent)} · ${esc(L.proto)}${L.bitrate ? " · " + esc(L.bitrate) + " kbps" : ""} · de ${fmtDur(Date.now() / 1000 - L.since)}${L.silent ? ' · <b style="color:var(--warning)">⚠ liniște</b>' : ""}${L.underruns ? ` · <span title="întreruperi scurte ale conexiunii studioului">${L.underruns} sughițări</span>` : ""}` : '<span class="badge off">neconectat</span>'}</div>
         ${A ? `<div>AutoDJ</div><div>${fmtN(A.files)} piese, ${fmtN(A.jingles)} jingle-uri${A.next ? ` · urmează: <i>${esc(A.next)}</i>` : ""}</div>` : `<div>AutoDJ</div><div class="muted">dezactivat</div>`}
+        ${st.relay && st.relay.state !== "off" ? `<div>Relay</div><div>${relayBadge(st.relay)} <span class="muted small" style="word-break:break-all">${esc(st.relay.url || "")}</span>${st.relay.error ? `<div class="small" style="color:#ff8a8a">${esc(st.relay.error)}</div>` : ""}</div>` : ""}
+        ${st.pushes && st.pushes.length ? `<div>Retransmisii</div><div>${st.pushes.map(p => `<div class="small" style="margin-bottom:3px">${pushBadge(p)} <b>${esc(p.name)}</b> <span class="muted">${esc(p.type)} · ${esc(p.target || "")}${p.state === "connected" ? " · " + fmtDur(Date.now() / 1000 - p.since) + " · " + fmtBytes(p.bytes) : ""}</span>${p.error && p.state !== "connected" ? `<div style="color:#ff8a8a;word-break:break-word">${esc(p.error.slice(0, 160))}</div>` : ""}</div>`).join("")}</div>` : ""}
         <div>Mounturi</div><div>${st.mounts.map(m => `<a href="${esc(m.mount)}" target="_blank">${esc(m.mount)}</a> <span class="muted">${m.codec.toUpperCase()} ${m.bitrate}k · ${m.listeners}</span>`).join(" &nbsp; ")}</div>
       </div>
       <div class="row" style="margin-top:14px">
@@ -169,6 +176,14 @@ async function loadDash() {
         <a class="btn sm" href="/manager#${st.id}" target="_blank">Statistici ↗</a>
       </div></div>`;
   }).join("") + d.stopped.map(s => `<div class="card"><div class="card-head"><h2>${esc(s.name)}</h2><span class="badge off">dezactivat</span></div><p class="muted">Postul este oprit. Îl activezi din tab-ul Posturi.</p></div>`).join("");
+}
+function relayBadge(r) {
+  return r.state === "connected" ? `<span class="badge ok">conectat</span>` : r.state === "connecting" ? `<span class="badge autodj">conectare...</span>` :
+    r.state === "schedule" ? `<span class="badge off">în afara programului</span>` : r.state === "error" ? `<span class="badge err">eroare – reîncerc în ${r.retry_in}s</span>` : `<span class="badge off">oprit</span>`;
+}
+function pushBadge(p) {
+  return !p.enabled ? `<span class="badge off">dezactivat</span>` : p.state === "connected" ? `<span class="badge ok">conectat</span>` :
+    p.state === "connecting" ? `<span class="badge autodj">conectare...</span>` : `<span class="badge err">eroare</span>`;
 }
 async function skip(id) { try { await api("POST", `/api/admin/stations/${id}/skip`); toast("Piesa a fost sărită"); } catch (e) { fail(e); } }
 async function kickSource(id) { if (await confirmBox("Deconectezi sursa live (studioul)? Encoderul lor se va reconecta automat dacă are reconectare activată.")) try { await api("POST", `/api/admin/stations/${id}/kick-source`); } catch (e) { fail(e); } }
@@ -181,7 +196,7 @@ async function loadStations() {
     <td class="mono">/${esc(s.slug)}</td>
     <td class="small">${s.outputs.map(o => `${o.codec.toUpperCase()} ${o.bitrate}k <span class="muted">/${esc(s.slug + o.mount)}</span>`).join("<br>")}</td>
     <td>${s.enabled ? '<span class="badge ok">activ</span>' : '<span class="badge off">oprit</span>'}</td>
-    <td>${s.autodj ? "da" : "nu"}</td>
+    <td class="small">studio${s.relay && s.relay.enabled ? " · relay" : ""}${s.autodj ? " · AutoDJ" : ""}${s.pushes && s.pushes.length ? `<div class="muted">${s.pushes.length} retransmisi${s.pushes.length === 1 ? "e" : "i"}</div>` : ""}</td>
     <td class="right nowrap"><button class="btn sm" onclick="studioInfo(${s.id})">Date studio</button>
       <button class="btn sm" onclick="editStation(${s.id})">Editează</button>
       <button class="btn sm" onclick="restartSt(${s.id})">Repornește</button>
@@ -202,9 +217,50 @@ function outRow(o) {
     <button class="btn sm danger" type="button" onclick="this.parentNode.remove()">✕</button></div>`;
 }
 
+function schedRow(it) {
+  const d = it.days || [1, 2, 3, 4, 5, 6, 7];
+  return `<div class="sched-row"><span class="days">${WD.map((w, i) => `<label><input type="checkbox" value="${i + 1}"${d.includes(i + 1) ? " checked" : ""}>${w}</label>`).join("")}</span>
+    <input type="time" data-k="start" value="${esc(it.start || "12:00")}"> – <input type="time" data-k="end" value="${esc(it.end || "13:00")}">
+    <button class="btn sm danger" type="button" onclick="this.parentNode.remove()">✕</button></div>`;
+}
+function pushRow(p, outs) {
+  p = Object.assign({type: "icecast", enabled: 1, port: 8000, mount: "/stream", user: "source", video: 1}, p);
+  const outOpts = outs.map(o => `<option value="${esc(o.mount)}"${(p.output ?? outs[0].mount) === o.mount ? " selected" : ""}>${o.codec.toUpperCase()} ${o.bitrate}k (/slug${esc(o.mount)})</option>`).join("");
+  return `<div class="sub-box push-row">
+    <div class="row" style="margin-bottom:8px"><input data-k="name" placeholder="Nume (ex: Server rezervă)" value="${esc(p.name || "")}" style="flex:1">
+      <select data-k="type"><option value="icecast"${p.type === "icecast" ? " selected" : ""}>Icecast</option><option value="shoutcast"${p.type === "shoutcast" ? " selected" : ""}>SHOUTcast v1</option><option value="rtmp"${p.type === "rtmp" ? " selected" : ""}>RTMP (YouTube, Facebook...)</option></select>
+      <label class="chk"><input type="checkbox" data-k="enabled"${p.enabled ? " checked" : ""}> activ</label>
+      <button class="btn sm danger" type="button" onclick="this.closest('.push-row').remove()">✕</button></div>
+    <div class="push-grid">
+      <label class="f">Trimite stream-ul<select data-k="output">${outOpts}</select></label>
+      <label class="f t-sc">Server<input data-k="host" value="${esc(p.host || "")}" placeholder="ip sau domeniu"></label>
+      <label class="f t-sc">Port<input data-k="port" type="number" value="${esc(p.port)}"></label>
+      <label class="f t-ice">Mount<input data-k="mount" value="${esc(p.mount)}"></label>
+      <label class="f t-ice">Utilizator<input data-k="user" value="${esc(p.user)}"></label>
+      <label class="f t-sc">Parolă<input data-k="password" value="${esc(p.password || "")}"></label>
+      <label class="chk t-ice" style="align-self:end"><input type="checkbox" data-k="tls"${p.tls ? " checked" : ""}> HTTPS/TLS</label>
+      <label class="f t-rtmp" style="grid-column:span 2">Adresă server RTMP<input data-k="url" value="${esc(p.url || "")}" placeholder="rtmp://a.rtmp.youtube.com/live2"></label>
+      <label class="f t-rtmp">Cheie stream<input data-k="key" value="${esc(p.key || "")}"></label>
+      <label class="chk t-rtmp" style="align-self:end"><input type="checkbox" data-k="video"${p.video ? " checked" : ""}> cu imagine (logo)</label>
+    </div>
+    <div class="muted small t-scnote" style="margin-top:6px">La SHOUTcast pune portul principal al serverului; conexiunea se face automat pe port+1. Pentru DNAS v2 cu mai multe stream-uri: parola:#1.</div>
+    <div class="muted small t-rtmpnote" style="margin-top:6px">YouTube/Facebook cer imagine: se trimite logo-ul postului, 720p, 15 fps (consum mic de CPU). Debifează pentru servere RTMP care acceptă doar audio.</div>
+  </div>`;
+}
+function pushTypeUpdate(row) {
+  const t = $("[data-k=type]", row).value;
+  $$(".t-sc", row).forEach(e => e.classList.toggle("hidden", t === "rtmp"));
+  $$(".t-ice", row).forEach(e => e.classList.toggle("hidden", t !== "icecast"));
+  $$(".t-rtmp", row).forEach(e => e.classList.toggle("hidden", t !== "rtmp"));
+  $(".t-scnote", row).classList.toggle("hidden", t !== "shoutcast");
+  $(".t-rtmpnote", row).classList.toggle("hidden", t !== "rtmp");
+}
+function wirePushRows(m) { $$(".push-row", m).forEach(r => { pushTypeUpdate(r); $("[data-k=type]", r).onchange = () => pushTypeUpdate(r); }); }
+
 async function editStation(id) {
   if (!STATIONS.length) STATIONS = await api("GET", "/api/admin/stations");
-  const s = id ? STATIONS.find(x => x.id === id) : {name: "", slug: "", genre: "", description: "", website: "", source_pass: "", max_listeners: 1000, enabled: 1, autodj: 1, shuffle: 1, crossfade: 3, jingle_every: 4, silence_secs: 0, outputs: [{mount: "", codec: "mp3", bitrate: 128}, {mount: ".aac", codec: "aac", bitrate: 64}]};
+  const s = id ? STATIONS.find(x => x.id === id) : {name: "", slug: "", genre: "", description: "", website: "", source_pass: "", max_listeners: 1000, enabled: 1, autodj: 1, shuffle: 1, crossfade: 3, jingle_every: 4, silence_secs: 0, outputs: [{mount: "", codec: "mp3", bitrate: 128}, {mount: ".aac", codec: "aac", bitrate: 64}], relay: {}, pushes: []};
+  const R = s.relay || {};
   modal(`<h2>${id ? "Editează postul" : "Post nou"}</h2>
    <div class="grid g2">
      <label class="f">Nume post<input id="e-name" value="${esc(s.name)}"></label>
@@ -227,19 +283,46 @@ async function editStation(id) {
      <span></span>
      <label class="f">Crossfade (secunde, 0 = fără)<input id="e-crossfade" type="number" step="0.5" min="0" max="10" value="${s.crossfade}"></label>
      <label class="f">Jingle după fiecare N piese (0 = niciodată)<input id="e-jingle_every" type="number" min="0" value="${s.jingle_every}"></label>
-     <label class="f" style="grid-column:1/-1">Detectare liniște pe studio: trece pe AutoDJ după N secunde de liniște (0 = dezactivat)<input id="e-silence_secs" type="number" min="0" value="${s.silence_secs}"></label>
+     <label class="f" style="grid-column:1/-1">Detectare liniște pe studio / relay: trece pe sursa următoare după N secunde de liniște (0 = dezactivat)<input id="e-silence_secs" type="number" min="0" value="${s.silence_secs}"></label>
    </div>
+   <h3 style="margin-top:16px">Relay de intrare (preia un post extern)</h3>
+   <p class="muted small">Ordinea surselor: <b>studio live → relay → AutoDJ</b>. Pentru un post doar prin relay, lasă studioul neconectat. Merge cu MP3/AAC/OGG (Icecast, SHOUTcast), playlist .pls/.m3u și HLS .m3u8.</p>
+   <div class="sub-box">
+     <label class="chk" style="margin-bottom:8px"><input type="checkbox" id="e-relay-en" ${R.enabled ? "checked" : ""}> Relay activ</label>
+     <label class="f">Adresa stream-ului<input id="e-relay-url" value="${esc(R.url || "")}" placeholder="http://server:8000/live  sau  https://.../playlist.m3u8"></label>
+     <div class="small muted" style="margin:10px 0 6px">Program (opțional – fără intervale = permanent):</div>
+     <div id="e-sched">${(R.schedule || []).map(schedRow).join("")}</div>
+     <button class="btn sm" type="button" id="e-addsched">+ interval orar</button>
+   </div>
+   <h3 style="margin-top:16px">Relay de ieșire (retransmisii)</h3>
+   <p class="muted small">Postul este trimis automat către alte servere: Icecast / SHOUTcast (rezervă, platforme, agregatoare) sau RTMP (YouTube / Facebook live). Reconectare automată.</p>
+   <div id="e-pushes">${(s.pushes || []).map(p => pushRow(p, s.outputs)).join("")}</div>
+   <button class="btn sm" type="button" id="e-addpush">+ retransmisie</button>
    ${id ? `<h3 style="margin-top:16px">Logo (pentru player public)</h3><div class="row"><img src="/logo/${esc(s.slug)}?${Date.now()}" style="width:56px;height:56px;border-radius:8px;object-fit:cover;background:var(--surface-2)"><input type="file" id="e-logo" accept="image/*"></div>` : ""}
    <div class="actions"><button class="btn" data-close>Anulează</button><button class="btn primary" id="e-save">Salvează</button></div>`,
   (m, close) => {
     $("#e-gen", m).onclick = () => { const a = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"; $("#e-source_pass", m).value = Array.from(crypto.getRandomValues(new Uint32Array(10)), x => a[x % a.length]).join(""); };
+    wirePushRows(m);
+    $("#e-addsched", m).onclick = () => $("#e-sched", m).insertAdjacentHTML("beforeend", schedRow({}));
+    $("#e-addpush", m).onclick = () => {
+      const outs = $$(".out-row", m).map(r => ({mount: $("[data-k=mount]", r).value.trim(), codec: $("[data-k=codec]", r).value, bitrate: +$("[data-k=bitrate]", r).value}));
+      $("#e-pushes", m).insertAdjacentHTML("beforeend", pushRow({}, outs.length ? outs : s.outputs));
+      wirePushRows(m);
+    };
     $("#e-addout", m).onclick = () => $("#e-outs", m).insertAdjacentHTML("beforeend", outRow({mount: "-" + Math.random().toString(36).slice(2, 5), codec: "mp3", bitrate: 64}));
     $("#e-save", m).onclick = async () => {
       const v = k => $("#e-" + k, m).value, c = k => $("#e-" + k, m).checked ? 1 : 0;
       const body = {name: v("name"), slug: v("slug"), genre: v("genre"), website: v("website"), description: v("description"),
         source_pass: v("source_pass"), max_listeners: +v("max_listeners"), enabled: c("enabled"), autodj: c("autodj"), shuffle: c("shuffle"),
         crossfade: +v("crossfade"), jingle_every: +v("jingle_every"), silence_secs: +v("silence_secs"),
-        outputs: $$(".out-row", m).map(r => ({mount: $("[data-k=mount]", r).value.trim(), codec: $("[data-k=codec]", r).value, bitrate: +$("[data-k=bitrate]", r).value}))};
+        outputs: $$(".out-row", m).map(r => ({mount: $("[data-k=mount]", r).value.trim(), codec: $("[data-k=codec]", r).value, bitrate: +$("[data-k=bitrate]", r).value})),
+        relay: {enabled: $("#e-relay-en", m).checked ? 1 : 0, url: $("#e-relay-url", m).value.trim(),
+          schedule: $$("#e-sched .sched-row", m).map(r => ({days: $$(".days input:checked", r).map(x => +x.value), start: $("[data-k=start]", r).value, end: $("[data-k=end]", r).value}))},
+        pushes: $$(".push-row", m).map(r => {
+          const g = k => { const e = $(`[data-k=${k}]`, r); return e.type === "checkbox" ? (e.checked ? 1 : 0) : e.value; };
+          return {name: g("name"), type: g("type"), enabled: g("enabled"), output: g("output"), host: g("host"), port: +g("port"), mount: g("mount"),
+            user: g("user"), password: g("password"), tls: g("tls"), url: g("url"), key: g("key"), video: g("video")};
+        })};
       try {
         const r = id ? await api("PUT", `/api/admin/stations/${id}`, body) : await api("POST", "/api/admin/stations", body);
         const logo = $("#e-logo", m);
@@ -397,7 +480,8 @@ $("#addUser").onclick = async () => {
 };
 
 /* ================= EVENIMENTE ================= */
-const EVN = {source_connect: "🟢 Studio conectat", source_disconnect: "🔴 Studio deconectat", source_kick: "⛔ Studio deconectat de admin", silence: "⚠ Liniște pe emisie", config: "⚙ Configurare"};
+const EVN = {source_connect: "🟢 Studio conectat", source_disconnect: "🔴 Studio deconectat", source_kick: "⛔ Studio deconectat de admin", silence: "⚠ Liniște pe emisie", config: "⚙ Configurare",
+  relay_up: "🔵 Relay conectat", relay_down: "🔴 Relay întrerupt", push_up: "📡 Retransmisie conectată", push_down: "🔴 Retransmisie întreruptă"};
 async function loadEvents() {
   const d = await api("GET", "/api/admin/events");
   $("#ev-list").innerHTML = d.events.map(e => `<tr><td class="nowrap">${fmtDT(e.ts)}</td><td>${esc(e.station || "")}</td><td class="nowrap">${EVN[e.type] || esc(e.type)}</td><td class="small">${esc(e.detail)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">Niciun eveniment.</td></tr>`;

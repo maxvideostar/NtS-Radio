@@ -174,6 +174,7 @@ class Hub:
         self.bitrate = int(out["bitrate"])
         self.mount = "/" + station.cfg["slug"] + (out.get("mount") or "")
         self.listeners = {}
+        self.taps = set()                                # consumatori interni (retransmisii)
         self.burst = collections.deque()
         self.burst_bytes = 0
         self.burst_max = self.bitrate * 125 * 3          # ~3 secunde pentru pornire rapidă
@@ -191,6 +192,8 @@ class Hub:
             self.burst_bytes -= len(self.burst.popleft())
         for l in list(self.listeners.values()):
             l.push(data)
+        for t in list(self.taps):
+            t.push(data)
         self.bytes_out += len(data) * len(self.listeners)
 
 
@@ -282,6 +285,7 @@ class LiveInput:
         self.underruns = 0
         self.peak = 0
         self.kicked = False
+        self.source_url = None
 
     async def start(self):
         fmt = []
@@ -294,6 +298,16 @@ class LiveInput:
         args = [FFMPEG, "-hide_banner", "-loglevel", "error", "-probesize", "65536", "-analyzeduration", "500000",
                 *fmt, "-i", "pipe:0", "-vn", "-f", "s16le", "-ar", str(SR), "-ac", str(CH), "pipe:1"]
         self.proc = await asyncio.create_subprocess_exec(*args, stdin=asyncio.subprocess.PIPE,
+                                                         stdout=asyncio.subprocess.PIPE,
+                                                         stderr=asyncio.subprocess.DEVNULL)
+        self.task = asyncio.create_task(self._read())
+
+    async def start_url(self, url):
+        """ffmpeg citește direct o adresă (HLS)"""
+        args = [FFMPEG, "-hide_banner", "-loglevel", "error", "-reconnect", "1", "-reconnect_streamed", "1",
+                "-reconnect_delay_max", "10", "-user_agent", "NtS-Radio/1.0", "-i", url, "-vn",
+                "-f", "s16le", "-ar", str(SR), "-ac", str(CH), "pipe:1"]
+        self.proc = await asyncio.create_subprocess_exec(*args, stdin=asyncio.subprocess.DEVNULL,
                                                          stdout=asyncio.subprocess.PIPE,
                                                          stderr=asyncio.subprocess.DEVNULL)
         self.task = asyncio.create_task(self._read())
@@ -362,10 +376,11 @@ class LiveInput:
                 self.silent_since = t
             if not self.silent and t - self.silent_since >= silence_secs:
                 self.silent = True
-                log("liniște pe sursa live -> AutoDJ", "warn", self.station.cfg["slug"])
-                self.station.radio.db.event(self.station.id, "silence", f"liniște > {silence_secs}s")
-                self.station.radio.alert(f"⚠️ {self.station.cfg['name']}: liniște pe emisia din studio "
-                                         f"(>{silence_secs}s). Am trecut pe AutoDJ.")
+                what = "relay" if self.proto == "Relay" else "studio"
+                log(f"liniște pe sursa {what} -> următoarea sursă", "warn", self.station.cfg["slug"])
+                self.station.radio.db.event(self.station.id, "silence", f"liniște pe {what} > {silence_secs}s")
+                self.station.radio.alert(f"⚠️ {self.station.cfg['name']}: liniște pe {what} "
+                                         f"(>{silence_secs}s). Am trecut pe sursa de rezervă.")
         else:
             self.silent_since = None
             if self.silent:
@@ -373,7 +388,7 @@ class LiveInput:
                     self.loud_since = t
                 if t - self.loud_since > 2:
                     self.silent = False
-                    log("sunetul a revenit pe sursa live", "info", self.station.cfg["slug"])
+                    log(f"sunetul a revenit pe sursa {self.proto}", "info", self.station.cfg["slug"])
 
     async def close(self):
         self.closed = True
@@ -387,7 +402,7 @@ class LiveInput:
             self.task.cancel()
 
     def info(self):
-        return {"ip": self.ip, "agent": self.agent, "proto": self.proto, "ctype": self.ctype, "name": self.name,
+        return {"ip": self.ip, "agent": self.agent, "proto": self.proto, "url": self.source_url, "ctype": self.ctype, "name": self.name,
                 "bitrate": self.bitrate, "since": int(self.connected_at), "bytes_in": self.bytes_in,
                 "ready": self.ready, "silent": self.silent, "underruns": self.underruns,
                 "peak_db": peak_db(self.peak)}
@@ -669,6 +684,11 @@ class Station:
         self.peak_today = (time.strftime("%Y-%m-%d"), 0)
         self.alert_task = None
         self.alerted_down = False
+        self.relay = None
+        self.relay_title = None
+        self.relay_status = {"state": "off"}
+        self.relay_task = None
+        self.pushes = []
 
     @property
     def slug(self):
@@ -691,12 +711,53 @@ class Station:
         if self.cfg.get("autodj", 1):
             await self.autodj.prepare()
         self.task = asyncio.create_task(self.run())
+        from .relay import relay_loop
+        self.relay_task = asyncio.create_task(relay_loop(self))
+        self.start_pushes()
         log(f"pornit, mounturi: {', '.join(self.hubs)}", "info", self.slug)
+
+    def start_pushes(self):
+        from .relay import Push
+        self.pushes = []
+        for pc in self.cfg.get("pushes") or []:
+            p = Push(self, pc)
+            p.start()
+            self.pushes.append(p)
+
+    async def apply_cfg(self, cfg):
+        """aplică setări fără a deconecta ascultătorii (relay, retransmisii, AutoDJ etc.)"""
+        old = self.cfg
+        self.cfg = cfg
+        if json.dumps(old.get("pushes"), sort_keys=True) != json.dumps(cfg.get("pushes"), sort_keys=True):
+            from .relay import Push
+            keep = {}
+            for p in self.pushes:
+                keep.setdefault(p.key, []).append(p)
+            new = []
+            for pc in cfg.get("pushes") or []:
+                k = json.dumps(pc, sort_keys=True)
+                if keep.get(k):
+                    new.append(keep[k].pop(0))
+                else:
+                    p = Push(self, pc)
+                    p.start()
+                    new.append(p)
+            for lst in keep.values():
+                for p in lst:
+                    await p.stop()
+            self.pushes = new
 
     async def stop(self):
         self.running = False
         if self.task:
             self.task.cancel()
+        if self.relay_task:
+            self.relay_task.cancel()
+        for p in self.pushes:
+            await p.stop()
+        if self.relay:
+            await self.relay.close()
+            self.relay = None
         for h in self.hubs.values():
             for l in list(h.listeners.values()):
                 l.close()
@@ -714,6 +775,8 @@ class Station:
         if not title or title == self.title:
             return
         self.title = title
+        for p in self.pushes:
+            p.notify_title(title)
         try:
             self.radio.db.exec("INSERT INTO songs(station_id, ts, title, source, listeners) VALUES(?,?,?,?,?)",
                                (self.id, now(), title, source, self.listener_count()))
@@ -729,8 +792,12 @@ class Station:
         if mode == "live":
             self.live_started = time.time()
             self.on_track(self.live_title or f"{self.cfg['name']} - LIVE", "live")
+        elif mode == "relay":
+            if old != "relay":
+                self.live_started = time.time()
+            self.on_track(self.relay_title or self.cfg["name"], "relay")
         elif mode == "autodj":
-            if old == "live" and self.live_started and time.time() - self.live_started > 30:
+            if old in ("live", "relay") and self.live_started and time.time() - self.live_started > 30:
                 asyncio.create_task(self.autodj.restart_fresh())
             elif self.autodj.cur and not self.autodj.cur.jingle:
                 self.on_track(self.autodj.cur.title, "autodj")
@@ -752,6 +819,7 @@ class Station:
                     t_next = time.monotonic()
                 silence_secs = int(self.cfg.get("silence_secs") or 0)
                 data = None
+                mode = None
                 live = self.live
                 if live:
                     ld = live.take(CHUNK)
@@ -759,8 +827,17 @@ class Station:
                         live.update_silence(peak(ld), silence_secs)
                         if live.usable(silence_secs):
                             data = ld
+                            mode = "live"
+                relay = self.relay
+                if relay:
+                    rd = relay.take(CHUNK)
+                    if rd is not None:
+                        relay.update_silence(peak(rd), silence_secs)
+                        if data is None and relay.usable(silence_secs):
+                            data = rd
+                            mode = "relay"
                 if data is not None:
-                    mode = "live"
+                    pass
                 elif self.cfg.get("autodj", 1) and self.autodj.has_content():
                     mode = "autodj"
                     data = self.autodj.pull(CHUNK)
@@ -770,7 +847,7 @@ class Station:
                 if mode != self.mode:
                     self.set_mode(mode)
                     fade = 10
-                if fade > 0 and mode == "live":
+                if fade > 0 and mode in ("live", "relay"):
                     data = gain(data, 1 - fade / 10)
                 if fade > 0:
                     fade -= 1
@@ -823,6 +900,11 @@ class Station:
             self.radio.alert(f"🔴 {self.cfg['name']}: studioul s-a deconectat. Emite AutoDJ." if
                              self.cfg.get("autodj", 1) else f"🔴 {self.cfg['name']}: studioul s-a deconectat!")
 
+    def set_relay_title(self, title):
+        self.relay_title = title
+        if self.mode == "relay":
+            self.on_track(title, "relay")
+
     def set_live_title(self, title):
         self.live_title = title
         if self.mode == "live":
@@ -835,6 +917,8 @@ class Station:
                          for h in self.hubs.values()],
               "live": self.live.info() if self.live else None,
               "autodj": self.autodj.info() if self.cfg.get("autodj", 1) else None,
+              "relay": dict(self.relay_status, **({"input": self.relay.info()} if self.relay else {})),
+              "pushes": [p.info() for p in self.pushes],
               "out_peak_db": peak_db(self.out_peak), "running": self.running,
               "peak_today": self.peak_today[1]}
         return st

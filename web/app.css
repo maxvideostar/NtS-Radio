@@ -49,6 +49,8 @@ main{padding:20px;max-width:1400px;margin:0 auto}
 .badge.live{background:rgba(208,59,59,.18);color:#ff6b6b}
 .badge.live::before{animation:pulse 1.2s infinite}
 .badge.autodj{background:rgba(250,178,25,.15);color:var(--warning)}
+.badge.relay{background:rgba(57,135,229,.18);color:#86b6ef}
+.badge.err{background:rgba(208,59,59,.18);color:#ff8a8a}
 .badge.off{background:var(--surface-3);color:var(--text-muted)}
 .badge.ok{background:rgba(12,163,12,.15);color:#4fc24f}
 @keyframes pulse{50%{opacity:.25}}
