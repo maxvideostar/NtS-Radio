@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ro"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Statistici radio – NtS-Radio</title><link rel="icon" href="/static/logo.svg"><link rel="stylesheet" href="/static/app.css">
+<style>
+.period{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.period input[type=date]{padding:6px 8px}
+.hero .nowplaying{font-size:20px}
+.songs-mini div{padding:6px 0;border-bottom:1px solid var(--border);display:flex;gap:10px}
+.songs-mini .t{color:var(--text-muted);font-variant-numeric:tabular-nums;min-width:44px}
+.days label{display:inline-flex;gap:4px;align-items:center;margin-right:10px;color:var(--text-secondary)}
+</style></head>
+<body>
+<div class="topbar">
+  <div class="brand"><img id="st-logo" src="/static/logo.svg" alt="" style="border-radius:6px;object-fit:cover"><span id="st-name">Statistici</span></div>
+  <nav class="tabs" id="tabs">
+    <button data-t="live" class="active">Acum</button>
+    <button data-t="stats">Statistici</button>
+    <button data-t="songs">Piese difuzate</button>
+    <button data-t="shows">Emisiuni</button>
+    <button data-t="reports">Rapoarte & linkuri</button>
+  </nav>
+  <div class="userbox"><select id="st-sel" class="hidden"></select><span id="me"></span><button class="btn sm" id="admin-link" style="display:none" onclick="location.href='/admin'">Admin</button><button class="btn sm" id="pw-btn">Parolă</button><button class="btn sm" id="logout">Ieșire</button></div>
+</div>
+<main>
+  <div class="period hidden" id="period">
+    <div class="seg" id="pseg">
+      <button data-p="today" class="active">Azi</button><button data-p="yesterday">Ieri</button><button data-p="7d">7 zile</button>
+      <button data-p="30d">30 zile</button><button data-p="month">Luna aceasta</button><button data-p="lastmonth">Luna trecută</button>
+    </div>
+    <input type="date" id="p-from"> – <input type="date" id="p-to"> <button class="btn sm" id="p-apply">Aplică</button>
+    <span class="muted small" id="p-label"></span>
+  </div>
+
+  <section id="t-live">
+    <div class="grid g4" id="live-tiles"></div>
+    <div class="grid g2" style="margin-top:14px;grid-template-columns:1.4fr 1fr">
+      <div class="card hero"><div class="card-head"><h3>Acum se aude</h3><span id="live-mode"></span></div>
+        <div class="nowplaying" id="live-title"></div><div class="muted small" id="live-studio"></div>
+        <h3 style="margin-top:18px">Ascultători – ultimele 3 ore</h3><div id="live-chart"></div></div>
+      <div class="card"><h3>Ultimele piese</h3><div class="songs-mini" id="live-songs"></div></div>
+    </div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card"><h3>De unde ascultă acum</h3><div id="live-cc"></div></div>
+      <div class="card"><h3>Pe ce ascultă acum</h3><div id="live-dev"></div></div>
+    </div>
+  </section>
+
+  <section id="t-stats" class="hidden">
+    <div class="grid g6" id="st-tiles"></div>
+    <div class="card" style="margin-top:14px"><div class="card-head"><h3 id="ser-title">Ascultători în timp</h3><span class="muted small" id="ser-note"></span></div><div id="ser-chart"></div></div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card"><h3>Media ascultătorilor pe ore</h3><p class="muted small" style="margin-top:-6px">Arată la ce ore ai cei mai mulți ascultători.</p><div id="hour-chart"></div></div>
+      <div class="card"><h3>Media ascultătorilor pe zilele săptămânii</h3><p class="muted small" style="margin-top:-6px">&nbsp;</p><div id="wd-chart"></div></div>
+    </div>
+    <div class="grid g3" style="margin-top:14px">
+      <div class="card"><h3>Țări (ore ascultate)</h3><div id="cc-list"></div></div>
+      <div class="card"><h3>Dispozitive</h3><div id="dev-list"></div><h3 style="margin-top:16px">Sisteme de operare</h3><div id="os-list"></div></div>
+      <div class="card"><h3>Playere / aplicații</h3><div id="pl-list"></div><h3 style="margin-top:16px">Stream-uri</h3><div id="mount-list"></div></div>
+    </div>
+    <div class="card" style="margin-top:14px"><h3>Pe zile</h3><div class="table-wrap"><table><thead><tr><th>Ziua</th><th class="num">Ore ascultate</th><th class="num">Ascultători unici</th><th class="num">Medie</th><th class="num">Vârf</th></tr></thead><tbody id="daily"></tbody></table></div></div>
+  </section>
+
+  <section id="t-songs" class="hidden">
+    <div class="grid g2" style="grid-template-columns:1.5fr 1fr">
+      <div class="card"><div class="card-head"><h3>Istoric <span class="muted" id="h-total"></span></h3><input id="h-q" placeholder="Caută piesă / artist" style="max-width:240px"></div>
+        <div class="table-wrap"><table><thead><tr><th>Ora</th><th>Piesă</th><th>Sursă</th><th class="num">Ascultători</th></tr></thead><tbody id="h-list"></tbody></table></div>
+        <div style="text-align:center;margin-top:10px"><button class="btn sm hidden" id="h-more">Încarcă mai multe</button></div></div>
+      <div class="card"><h3>Cele mai difuzate</h3><div class="table-wrap"><table><thead><tr><th>Piesă</th><th class="num">Difuzări</th><th class="num">Medie asc.</th></tr></thead><tbody id="top-list"></tbody></table></div></div>
+    </div>
+  </section>
+
+  <section id="t-shows" class="hidden">
+    <div class="card"><div class="card-head"><h3>Emisiuni (grila postului)</h3><button class="btn primary" id="sh-add">+ Emisiune</button></div>
+      <p class="muted small">Trece emisiunile cu zilele și orele lor, iar sistemul calculează audiența fiecărei emisiuni pentru perioada aleasă mai sus.</p>
+      <div class="table-wrap"><table><thead><tr><th>Emisiune</th><th>Zile</th><th>Interval</th><th class="num">Difuzări</th><th class="num">Medie ascultători</th><th class="num">Vârf</th><th class="num">Ore ascultate</th><th></th></tr></thead><tbody id="sh-list"></tbody></table></div>
+    </div>
+  </section>
+
+  <section id="t-reports" class="hidden">
+    <div class="grid g2">
+      <div class="card"><h3>Rapoarte pentru perioada selectată</h3>
+        <p class="muted small">Alege perioada din bara de sus. Fișierele CSV se deschid direct în Excel.</p>
+        <div class="row" style="margin:10px 0"><button class="btn primary" id="r-pdf">📄 Raport complet (PDF / tipărire)</button></div>
+        <div class="row">
+          <button class="btn" data-csv="zilnic.csv">⬇ Audiență pe zile (CSV)</button>
+          <button class="btn" data-csv="piese.csv">⬇ Piese difuzate (CSV)</button>
+          <button class="btn" data-csv="emisiuni.csv">⬇ Emisiuni (CSV)</button>
+          <button class="btn" data-csv="tari.csv">⬇ Țări (CSV)</button>
+        </div>
+        <h3 style="margin-top:22px">Ce înseamnă indicatorii</h3>
+        <ul class="small muted" style="padding-left:18px">
+          <li><b>Ore ascultate (TLH)</b> – totalul orelor ascultate de toți ascultătorii. Indicatorul folosit pentru vânzarea publicității.</li>
+          <li><b>Ascultători unici</b> – adrese IP distincte care au ascultat cel puțin 30 de secunde.</li>
+          <li><b>Medie ascultători</b> – câți ascultători erau conectați în medie în fiecare minut.</li>
+          <li><b>Vârf</b> – numărul maxim de ascultători conectați simultan.</li>
+          <li><b>Timp mediu de ascultare</b> – cât stă în medie un ascultător conectat.</li>
+        </ul>
+      </div>
+      <div class="card"><h3>Linkuri pentru ascultători</h3><div id="links"></div></div>
+    </div>
+  </section>
+</main>
+<div class="footer">NtS-Radio · IP Geolocation by <a href="https://db-ip.com" target="_blank">DB-IP</a></div>
+
+<script src="/static/common.js"></script>
+<script>
+let SID = null, cur = "live", timer = null, P = {key: "today"}, stationsList = [];
+
+/* ---------- perioadă ---------- */
+function dayStart(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; }
+function calcPeriod(key) {
+  const now = new Date(), t0 = dayStart(now);
+  let a, b = now;
+  if (key === "today") a = t0;
+  else if (key === "yesterday") { a = new Date(t0); a.setDate(a.getDate() - 1); b = t0; }
+  else if (key === "7d") { a = new Date(t0); a.setDate(a.getDate() - 6); }
+  else if (key === "30d") { a = new Date(t0); a.setDate(a.getDate() - 29); }
+  else if (key === "month") a = new Date(now.getFullYear(), now.getMonth(), 1);
+  else if (key === "lastmonth") { a = new Date(now.getFullYear(), now.getMonth() - 1, 1); b = new Date(now.getFullYear(), now.getMonth(), 1); }
+  return {key, from: Math.floor(a / 1000), to: Math.floor(b / 1000)};
+}
+const ymd = ts => { const d = new Date(ts * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+function setPeriod(p) {
+  P = p;
+  $$("#pseg button").forEach(b => b.classList.toggle("active", b.dataset.p === p.key));
+  $("#p-from").value = ymd(p.from); $("#p-to").value = ymd(Math.max(p.from, p.to - 1));
+  $("#p-label").textContent = `${fmtDate(p.from)} – ${fmtDate(Math.max(p.from, p.to - 1))}`;
+  render();
+}
+$$("#pseg button").forEach(b => b.onclick = () => setPeriod(calcPeriod(b.dataset.p)));
+$("#p-apply").onclick = () => {
+  const a = new Date($("#p-from").value + "T00:00:00"), b = new Date($("#p-to").value + "T00:00:00");
+  if (isNaN(a) || isNaN(b) || b < a) return toast("Interval invalid", true);
+  b.setDate(b.getDate() + 1);
+  setPeriod({key: "custom", from: Math.floor(a / 1000), to: Math.min(Math.floor(b / 1000), Math.floor(Date.now() / 1000))});
+};
+const qs = () => `from=${P.from}&to=${P.to}`;
+
+/* ---------- navigare ---------- */
+$$("#tabs button").forEach(b => b.onclick = () => show(b.dataset.t));
+function show(t) {
+  cur = t;
+  $$("#tabs button").forEach(b => b.classList.toggle("active", b.dataset.t === t));
+  $$("main > section").forEach(s => s.classList.toggle("hidden", s.id !== "t-" + t));
+  $("#period").classList.toggle("hidden", t === "live");
+  render();
+}
+function render() {
+  clearInterval(timer); timer = null;
+  if (!SID) return;
+  if (cur === "live") { loadLive(); timer = setInterval(loadLive, 5000); }
+  if (cur === "stats") loadStats();
+  if (cur === "songs") { hOffset = 0; loadHistory(); loadTop(); }
+  if (cur === "shows") loadShows();
+  if (cur === "reports") loadLinks();
+}
+$("#logout").onclick = async () => { await api("POST", "/api/logout"); location.href = "/login"; };
+$("#pw-btn").onclick = () => modal(`<h2>Schimbă parola</h2><div class="grid" style="gap:12px"><label class="f">Parola actuală<input id="o" type="password"></label><label class="f">Parola nouă (min. 6 caractere)<input id="n" type="password"></label></div><div class="actions"><button class="btn" data-close>Anulează</button><button class="btn primary" id="ok">Salvează</button></div>`,
+  (m, close) => $("#ok", m).onclick = async () => { try { await api("PUT", "/api/me/password", {old: $("#o", m).value, new: $("#n", m).value}); toast("Parola a fost schimbată"); close(); } catch (e) { fail(e); } });
+
+const tile = (label, value, sub, delta) => `<div class="card tile"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${delta || ""}${sub || ""}</div></div>`;
+function deltaHtml(a, b) {
+  if (!b) return "";
+  const p = Math.round(100 * (a - b) / b);
+  return `<span class="delta ${p >= 0 ? "up" : "down"}">${p >= 0 ? "▲" : "▼"} ${Math.abs(p)}%</span> <span class="muted">vs. perioada anterioară</span>`;
+}
+
+/* ---------- ACUM ---------- */
+async function loadLive() {
+  let d;
+  try { d = await api("GET", `/api/station/${SID}/live`); } catch (e) { return; }
+  setTZ(d.tz);
+  const tlh = (d.today && d.today.secs || 0) / 3600;
+  $("#live-tiles").innerHTML =
+    tile("Ascultători acum", fmtN(d.listeners), d.listeners ? `timp mediu conectat: ${fmtDur(d.avg_time)}` : "") +
+    tile("Vârf azi", fmtN(d.peak_today), "maxim simultan") +
+    tile("Ascultători unici azi", fmtN(d.today ? d.today.unique_ips : 0), "adrese distincte") +
+    tile("Ore ascultate azi", fmtN1(tlh), "TLH");
+  $("#live-mode").innerHTML = modeBadge(d.mode);
+  $("#live-title").textContent = d.title || "—";
+  $("#live-studio").textContent = d.mode === "live" && d.live_since ? `Emisie live din studio de ${fmtDur(Date.now() / 1000 - d.live_since)}` :
+    d.mode === "autodj" ? "Studioul nu emite acum – rulează AutoDJ (muzică automată)." : "";
+  const pts = d.recent.map(r => ({t: r.ts, v: r.listeners}));
+  pts.push({t: Math.floor(Date.now() / 1000), v: d.listeners});
+  lineChart($("#live-chart"), pts, {fmtX: fmtTime, fmtTip: fmtTime, unit: "ascultători", height: 180, name: "Ascultători ultimele 3 ore"});
+  $("#live-songs").innerHTML = d.songs.map(s => `<div><span class="t">${fmtTime(s.ts)}</span><span style="flex:1">${esc(s.title)}${s.source === "live" ? ' <span class="badge live" style="font-size:10px;padding:1px 6px">live</span>' : ""}</span><span class="muted small">${s.listeners}</span></div>`).join("") || `<div class="muted">—</div>`;
+  barList($("#live-cc"), (d.countries || []).slice(0, 10).map(([c, n]) => ({label: countryName(c), html: `${flag(c)} ${esc(countryName(c))}`, value: n})));
+  barList($("#live-dev"), (d.devices || []).map(([k, n]) => ({label: k, value: n})));
+}
+
+/* ---------- STATISTICI ---------- */
+async function loadStats() {
+  $("#st-tiles").innerHTML = `<div class="card" style="grid-column:1/-1"><span class="muted">Se calculează...</span></div>`;
+  let d;
+  try { d = await api("GET", `/api/station/${SID}/stats?${qs()}`); } catch (e) { return fail(e); }
+  setTZ(d.tz);
+  const pv = d.prev || {};
+  $("#st-tiles").innerHTML =
+    tile("Ore ascultate (TLH)", fmtN1(d.tlh), "", deltaHtml(d.tlh, pv.tlh)) +
+    tile("Ascultători unici", fmtN(d.unique), "", deltaHtml(d.unique, pv.unique)) +
+    tile("Medie ascultători", fmtN1(d.avg_listeners), "", deltaHtml(d.avg_listeners, pv.avg)) +
+    tile("Vârf", fmtN(d.peak), d.peak_ts ? fmtDT(d.peak_ts) : "") +
+    tile("Timp mediu ascultare", fmtDur(d.avg_duration), `median ${fmtDur(d.median_duration)}`) +
+    tile("Sesiuni de ascultare", fmtN(d.sessions), "≥ 30 secunde");
+  const daily = d.step === 86400;
+  $("#ser-title").textContent = daily ? "Media ascultătorilor pe zile" : "Media ascultătorilor";
+  $("#ser-note").textContent = d.step === 600 ? "intervale de 10 minute" : d.step === 3600 ? "pe ore" : "pe zile";
+  lineChart($("#ser-chart"), d.series.map(s => ({t: s.t, v: s.avg, extra: `vârf: ${s.max}`})),
+    {fmtX: daily ? fmtDay : (d.step === 3600 ? fmtDay : fmtTime), fmtTip: daily ? fmtDay : fmtDT, unit: "ascultători în medie", height: 240, name: "Media ascultătorilor"});
+  barChart($("#hour-chart"), d.hours.map((_, h) => String(h).padStart(2, "0")), d.hours, {tipLabels: d.hours.map((_, h) => `${String(h).padStart(2, "0")}:00 – ${String(h).padStart(2, "0")}:59`), unit: "ascultători în medie", name: "Media pe ore"});
+  barChart($("#wd-chart"), WD, d.weekdays, {tipLabels: WD_FULL, unit: "ascultători în medie", name: "Media pe zile ale săptămânii"});
+  barList($("#cc-list"), d.countries.slice(0, 15).map(c => ({label: countryName(c.code), html: `${flag(c.code)} ${esc(countryName(c.code))}`, value: c.tlh, sub: c.pct + "%"})), {fmt: v => fmtN1(v) + " h"});
+  barList($("#dev-list"), d.devices.map(([k, n]) => ({label: k, value: n})));
+  barList($("#os-list"), d.os.map(([k, n]) => ({label: k, value: n})));
+  barList($("#pl-list"), d.players.map(([k, n]) => ({label: k, value: n})));
+  barList($("#mount-list"), d.mounts.map(m => ({label: m.mount, value: m.tlh})), {fmt: v => fmtN1(v) + " h"});
+  $("#daily").innerHTML = d.daily.slice().reverse().map(x => `<tr><td>${esc(x.day.split("-").reverse().join("."))}</td><td class="num">${fmtN1(x.tlh)}</td><td class="num">${fmtN(x.unique)}</td><td class="num">${fmtN1(x.avg)}</td><td class="num">${fmtN(x.peak)}</td></tr>`).join("");
+}
+
+/* ---------- PIESE ---------- */
+let hOffset = 0, hTimer;
+$("#h-q").oninput = () => { clearTimeout(hTimer); hTimer = setTimeout(() => { hOffset = 0; loadHistory(); }, 300); };
+$("#h-more").onclick = () => { hOffset += 200; loadHistory(true); };
+async function loadHistory(append) {
+  const d = await api("GET", `/api/station/${SID}/songs?${qs()}&offset=${hOffset}&q=${encodeURIComponent($("#h-q").value)}`);
+  $("#h-total").textContent = `(${fmtN(d.total)})`;
+  const html = d.rows.map(s => `<tr><td class="nowrap">${P.to - P.from > 86400 ? fmtDT(s.ts) : fmtTime(s.ts)}</td><td>${esc(s.title)}</td><td>${s.source === "live" ? '<span class="badge live">live</span>' : s.source === "autodj" ? '<span class="badge autodj">AutoDJ</span>' : '<span class="badge off">—</span>'}</td><td class="num">${s.listeners}</td></tr>`).join("");
+  if (append) $("#h-list").insertAdjacentHTML("beforeend", html);
+  else $("#h-list").innerHTML = html || `<tr><td colspan="4" class="empty">Nicio piesă în această perioadă.</td></tr>`;
+  $("#h-more").classList.toggle("hidden", hOffset + 200 >= d.total);
+}
+async function loadTop() {
+  const d = await api("GET", `/api/station/${SID}/top?${qs()}`);
+  $("#top-list").innerHTML = d.map(s => `<tr><td>${esc(s.title)}</td><td class="num">${s.plays}</td><td class="num">${fmtN1(s.avg_listeners)}</td></tr>`).join("") || `<tr><td colspan="3" class="empty">—</td></tr>`;
+}
+
+/* ---------- EMISIUNI ---------- */
+let SHOWS = [];
+async function loadShows() {
+  $("#sh-list").innerHTML = `<tr><td colspan="8" class="muted">Se calculează...</td></tr>`;
+  const d = await api("GET", `/api/station/${SID}/stats?${qs()}`);
+  SHOWS = d.shows;
+  $("#sh-list").innerHTML = SHOWS.sort((a, b) => b.avg - a.avg).map(s => `<tr><td><b>${esc(s.name)}</b>${s.host ? `<div class="muted small">${esc(s.host)}</div>` : ""}</td>
+    <td class="small">${String(s.days).split(",").map(x => WD[+x - 1]).join(", ")}</td><td class="nowrap">${esc(s.start)} – ${esc(s.end)}</td>
+    <td class="num">${s.occurrences}</td><td class="num"><b>${fmtN1(s.avg)}</b></td><td class="num">${fmtN(s.peak)}</td><td class="num">${fmtN1(s.tlh)}</td>
+    <td class="right nowrap"><button class="btn sm" onclick="editShow(${s.id})">Editează</button> <button class="btn sm danger" onclick="delShow(${s.id})">✕</button></td></tr>`).join("") || `<tr><td colspan="8" class="empty">Nicio emisiune adăugată încă.</td></tr>`;
+}
+$("#sh-add").onclick = () => editShow(null);
+function editShow(id) {
+  const s = id ? SHOWS.find(x => x.id === id) : {name: "", host: "", days: "1,2,3,4,5", start: "08:00", end: "10:00"};
+  const days = String(s.days).split(",").map(Number);
+  modal(`<h2>${id ? "Editează emisiunea" : "Emisiune nouă"}</h2><div class="grid" style="gap:12px">
+    <label class="f">Nume emisiune<input id="s-name" value="${esc(s.name)}"></label>
+    <label class="f">Prezentator (opțional)<input id="s-host" value="${esc(s.host)}"></label>
+    <div class="f days"><span class="small muted">Zile</span><div>${WD.map((w, i) => `<label><input type="checkbox" value="${i + 1}"${days.includes(i + 1) ? " checked" : ""}> ${w}</label>`).join("")}</div></div>
+    <div class="grid g2"><label class="f">Începe la<input type="time" id="s-start" value="${esc(s.start)}"></label><label class="f">Se termină la<input type="time" id="s-end" value="${esc(s.end)}"></label></div></div>
+    <div class="actions"><button class="btn" data-close>Anulează</button><button class="btn primary" id="s-save">Salvează</button></div>`,
+  (m, close) => $("#s-save", m).onclick = async () => {
+    const body = {name: $("#s-name", m).value, host: $("#s-host", m).value, days: $$(".days input:checked", m).map(x => +x.value), start: $("#s-start", m).value, end: $("#s-end", m).value};
+    try { id ? await api("PUT", `/api/station/${SID}/shows/${id}`, body) : await api("POST", `/api/station/${SID}/shows`, body); close(); loadShows(); } catch (e) { fail(e); }
+  });
+}
+async function delShow(id) { if (await confirmBox("Ștergi emisiunea din grilă?")) { await api("DELETE", `/api/station/${SID}/shows/${id}`); loadShows(); } }
+
+/* ---------- RAPOARTE ---------- */
+$$("[data-csv]").forEach(b => b.onclick = () => location.href = `/api/station/${SID}/export/${b.dataset.csv}?${qs()}`);
+$("#r-pdf").onclick = () => window.open(`/report/${SID}?${qs()}`, "_blank");
+async function loadLinks() {
+  const d = await api("GET", `/api/station/${SID}/live`);
+  const c = (label, v) => `<label class="f" style="margin-bottom:12px">${label}<div class="copy"><input readonly value="${esc(v)}"><button class="btn sm" onclick="copyText(this.previousElementSibling.value)">Copiază</button></div></label>`;
+  $("#links").innerHTML = c("Pagina player (o poți pune pe Facebook, site etc.)", d.public.player) +
+    c("Cod embed pentru site (player mic)", `<iframe src="${d.public.embed}" width="100%" height="120" frameborder="0" allow="autoplay" style="border:0;border-radius:12px"></iframe>`) +
+    (d.mounts || []).map(m => c(`Stream direct ${m.codec.toUpperCase()} ${m.bitrate} kbps (aplicații, agregatoare radio)`, m.url)).join("") +
+    c("Playlist M3U (VLC, Winamp, telefon)", d.public.m3u) + c("Playlist PLS", d.public.pls);
+}
+
+/* ---------- start ---------- */
+(async () => {
+  const me = await api("GET", "/api/me");
+  $("#me").textContent = me.username;
+  if (me.role === "admin") $("#admin-link").style.display = "";
+  stationsList = await api("GET", "/api/stations");
+  if (!stationsList.length) { $("main").innerHTML = `<div class="card empty">Contul tău nu are încă un post de radio asociat. Contactează administratorul.</div>`; return; }
+  const want = +location.hash.slice(1);
+  SID = (stationsList.find(s => s.id === want) || stationsList[0]).id;
+  if (stationsList.length > 1) {
+    const sel = $("#st-sel");
+    sel.classList.remove("hidden");
+    sel.innerHTML = stationsList.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
+    sel.value = SID;
+    sel.onchange = () => { SID = +sel.value; location.hash = SID; setHeader(); render(); };
+  }
+  setHeader();
+  setPeriod(calcPeriod("today"));
+  show("live");
+})();
+function setHeader() {
+  const s = stationsList.find(x => x.id === SID);
+  $("#st-name").textContent = s.name;
+  $("#st-logo").src = `/logo/${s.slug}`;
+  document.title = `Statistici ${s.name}`;
+}
+</script>
+</body></html>

@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="ro"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NtS-Radio – Autentificare</title><link rel="icon" href="/static/logo.svg"><link rel="stylesheet" href="/static/app.css">
+<style>
+body{display:flex;min-height:100vh;align-items:center;justify-content:center;background:radial-gradient(circle at 30% 20%,#1c2a3d 0,#111110 55%)}
+.box{width:100%;max-width:360px;padding:28px}
+.box .brand{justify-content:center;margin-bottom:22px;font-size:20px}.box .brand img{width:40px;height:40px}
+form{display:flex;flex-direction:column;gap:14px}
+.err{color:#ff8a8a;min-height:20px;font-size:13px}
+</style></head>
+<body><div class="card box">
+<div class="brand"><img src="/static/logo.svg" alt=""><span>NtS-Radio</span></div>
+<form id="f">
+ <label class="f">Utilizator<input name="username" autocomplete="username" required autofocus></label>
+ <label class="f">Parolă<input name="password" type="password" autocomplete="current-password" required></label>
+ <div class="err" id="err"></div>
+ <button class="btn primary" style="justify-content:center">Intră</button>
+</form></div>
+<script src="/static/common.js"></script>
+<script>
+$("#f").onsubmit = async e => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  try {
+    const r = await api("POST", "/api/login", {username: fd.get("username"), password: fd.get("password")});
+    const next = new URLSearchParams(location.search).get("next");
+    location.href = next && next.startsWith("/") ? next : (r.role === "admin" ? "/admin" : "/manager");
+  } catch (er) { $("#err").textContent = er.message; }
+};
+</script></body></html>

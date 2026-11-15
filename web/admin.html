@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="ro"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NtS-Radio – Administrare</title><link rel="icon" href="/static/logo.svg"><link rel="stylesheet" href="/static/app.css">
+<style>
+.st-card .meta{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px;margin-top:10px}
+.st-card .meta div:nth-child(odd){color:var(--text-muted)}
+.levels{display:grid;grid-template-columns:70px 1fr 70px;gap:6px 10px;align-items:center;font-size:12px;color:var(--text-muted);margin-top:12px}
+.out-row{display:grid;grid-template-columns:1.2fr 1fr 1fr auto;gap:8px;margin-bottom:8px}
+.drop{border:2px dashed var(--border);border-radius:10px;padding:18px;text-align:center;color:var(--text-muted);cursor:pointer}
+.drop.over{border-color:var(--accent);color:var(--text-primary)}
+.prog{height:4px;background:var(--surface-3);border-radius:2px;overflow:hidden;margin-top:8px}.prog div{height:100%;background:var(--accent);width:0}
+.studio-box td{padding:6px 8px}
+</style></head>
+<body>
+<div class="topbar">
+  <div class="brand"><img src="/static/logo.svg" alt=""><span>NtS-Radio</span><small id="ver"></small></div>
+  <nav class="tabs" id="tabs">
+    <button data-t="dash" class="active">Dashboard</button>
+    <button data-t="stations">Posturi</button>
+    <button data-t="autodj">AutoDJ</button>
+    <button data-t="listeners">Ascultători</button>
+    <button data-t="users">Utilizatori</button>
+    <button data-t="events">Evenimente</button>
+    <button data-t="settings">Setări</button>
+    <button onclick="location.href='/manager'">Statistici ↗</button>
+  </nav>
+  <div class="userbox"><span id="me"></span><button class="btn sm" id="logout">Ieșire</button></div>
+</div>
+<main>
+  <section id="t-dash">
+    <div class="grid g4" id="srv"></div>
+    <div class="grid g2" id="dash-st" style="margin-top:14px"></div>
+  </section>
+
+  <section id="t-stations" class="hidden">
+    <div class="card"><div class="card-head"><h2>Posturi de radio</h2><button class="btn primary" id="addSt">+ Post nou</button></div>
+      <div class="table-wrap"><table><thead><tr><th>Nume</th><th>Mount</th><th>Ieșiri</th><th>Stare</th><th>AutoDJ</th><th></th></tr></thead><tbody id="st-list"></tbody></table></div>
+    </div>
+  </section>
+
+  <section id="t-autodj" class="hidden">
+    <div class="card" style="margin-bottom:14px"><div class="row">
+      <label class="f">Post<select id="adj-st"></select></label>
+      <div class="spacer"></div>
+      <div id="adj-now" class="small"></div>
+      <button class="btn" id="adj-skip">⏭ Sari la următoarea piesă</button>
+    </div></div>
+    <div class="grid g2">
+      <div class="card" id="box-music"></div>
+      <div class="card" id="box-jingles"></div>
+    </div>
+  </section>
+
+  <section id="t-listeners" class="hidden">
+    <div class="card"><div class="card-head"><h2>Ascultători conectați <span class="muted" id="lis-count"></span></h2>
+      <input id="lis-filter" placeholder="Caută IP, țară, player..." style="max-width:260px"></div>
+      <div class="table-wrap"><table><thead><tr><th>Post / mount</th><th>IP</th><th>Țară</th><th>Dispozitiv / player</th><th class="num">Durată</th><th class="num">Trimis</th><th></th></tr></thead><tbody id="lis-list"></tbody></table></div>
+    </div>
+    <div class="card" style="margin-top:14px"><div class="card-head"><h3>IP-uri blocate</h3>
+      <div class="row"><input id="ban-ip" placeholder="IP"><input id="ban-reason" placeholder="Motiv (opțional)"><button class="btn" id="ban-add">Blochează</button></div></div>
+      <table><thead><tr><th>IP</th><th>Motiv</th><th>Data</th><th></th></tr></thead><tbody id="ban-list"></tbody></table>
+    </div>
+  </section>
+
+  <section id="t-users" class="hidden">
+    <div class="card"><div class="card-head"><h2>Utilizatori</h2><button class="btn primary" id="addUser">+ Cont manager</button></div>
+      <p class="muted small">Managerul postului vede doar statisticile postului său (pagina /manager). Nu are acces la setări tehnice, parole sau IP-urile complete ale ascultătorilor.</p>
+      <table><thead><tr><th>Utilizator</th><th>Rol</th><th>Post</th><th>Creat</th><th></th></tr></thead><tbody id="user-list"></tbody></table>
+    </div>
+  </section>
+
+  <section id="t-events" class="hidden">
+    <div class="grid g2">
+      <div class="card"><div class="card-head"><h2>Evenimente posturi</h2></div>
+        <div class="table-wrap"><table><thead><tr><th>Data</th><th>Post</th><th>Eveniment</th><th>Detalii</th></tr></thead><tbody id="ev-list"></tbody></table></div></div>
+      <div class="card"><div class="card-head"><h2>Jurnal sistem</h2><button class="btn sm" id="ev-refresh">Reîncarcă</button></div>
+        <div class="table-wrap mono small" id="log-list"></div></div>
+    </div>
+  </section>
+
+  <section id="t-settings" class="hidden">
+    <div class="grid g2">
+      <div class="card"><h2>General</h2>
+        <div class="grid" style="gap:12px">
+          <label class="f">Adresă publică (pentru linkuri player / m3u / embed)<input id="s-public_url" placeholder="https://radio.domeniu.ro  (gol = automat)"></label>
+          <label class="f">Fus orar statistici<input id="s-timezone" placeholder="Europe/Bucharest"></label>
+          <label class="f">Păstrează statisticile (zile)<input id="s-retention_days" type="number" min="30"></label>
+          <div class="row"><button class="btn primary" id="s-save">Salvează</button></div>
+        </div>
+        <h2 style="margin-top:24px">Alerte Telegram</h2>
+        <p class="muted small">Primești mesaj când studioul se deconectează (după 20 s), când revine și când e liniște pe emisie. Creezi botul la @BotFather, iar chat ID-ul îl afli de la @userinfobot.</p>
+        <div class="grid g2">
+          <label class="f">Bot token<input id="s-telegram_token" placeholder="123456:ABC..."></label>
+          <label class="f">Chat ID<input id="s-telegram_chat" placeholder="-100... sau 12345"></label>
+        </div>
+        <div class="row" style="margin-top:10px"><button class="btn primary" id="s-save2">Salvează</button><button class="btn" id="s-test">Trimite test</button></div>
+      </div>
+      <div class="card"><h2>Parola mea</h2>
+        <div class="grid" style="gap:12px;max-width:360px">
+          <label class="f">Parola actuală<input id="pw-old" type="password"></label>
+          <label class="f">Parola nouă<input id="pw-new" type="password"></label>
+          <div><button class="btn primary" id="pw-save">Schimbă parola</button></div>
+        </div>
+        <h2 style="margin-top:24px">GeoIP (țara ascultătorilor)</h2>
+        <p class="muted small" id="geo-status"></p>
+        <button class="btn" id="geo-upd">Actualizează acum</button>
+        <p class="muted small">IP Geolocation by <a href="https://db-ip.com" target="_blank">DB-IP</a> (CC BY 4.0). Se actualizează automat lunar.</p>
+      </div>
+    </div>
+  </section>
+</main>
+<div class="footer">NtS-Radio · netstreaming</div>
+
+<script src="/static/common.js"></script>
+<script>
+let STATIONS = [], timer = null, cur = "dash", lisData = [];
+const STATE = {};
+
+$$("#tabs button[data-t]").forEach(b => b.onclick = () => show(b.dataset.t));
+function show(t) {
+  cur = t;
+  $$("#tabs button[data-t]").forEach(b => b.classList.toggle("active", b.dataset.t === t));
+  $$("main > section").forEach(s => s.classList.toggle("hidden", s.id !== "t-" + t));
+  location.hash = t;
+  clearInterval(timer); timer = null;
+  ({dash: loadDash, stations: loadStations, autodj: loadAutodj, listeners: loadListeners, users: loadUsers,
+    events: loadEvents, settings: loadSettings})[t]();
+  if (t === "dash") timer = setInterval(loadDash, 2000);
+  if (t === "listeners") timer = setInterval(loadListeners, 5000);
+  if (t === "autodj") timer = setInterval(refreshAdjNow, 3000);
+}
+$("#logout").onclick = async () => { await api("POST", "/api/logout"); location.href = "/login"; };
+
+/* ================= DASHBOARD ================= */
+async function loadDash() {
+  let d;
+  try { d = await api("GET", "/api/admin/overview"); } catch (e) { return; }
+  $("#ver").textContent = "v" + d.version;
+  const s = d.server;
+  $("#srv").innerHTML = `
+    <div class="card tile"><div class="label">Ascultători acum</div><div class="value">${fmtN(s.listeners)}</div><div class="sub">toate posturile</div></div>
+    <div class="card tile"><div class="label">Trafic ieșire</div><div class="value">${fmtN1(s.out_kbps / 1000)} <span style="font-size:16px">Mbps</span></div><div class="sub">≈ ${fmtBytes(s.out_kbps * 1000 / 8 * 3600)}/oră</div></div>
+    <div class="card tile"><div class="label">Server</div><div class="value" style="font-size:20px;margin-top:10px">load ${s.load ? s.load.map(x => x.toFixed(2)).join(" / ") : "-"}</div><div class="sub">${s.cpus || "?"} CPU · RAM ${fmtBytes(s.mem_used)} / ${fmtBytes(s.mem_total)}</div></div>
+    <div class="card tile"><div class="label">Uptime</div><div class="value" style="font-size:22px;margin-top:8px">${fmtDur(s.uptime)}</div><div class="sub">disc liber ${fmtBytes(s.disk_free)}</div></div>`;
+  const box = $("#dash-st");
+  box.innerHTML = d.stations.map(st => {
+    const L = st.live, A = st.autodj;
+    return `<div class="card st-card">
+      <div class="card-head"><h2>${esc(st.name)}</h2>${modeBadge(st.mode)}</div>
+      <div class="muted small">Acum se aude</div><div class="nowplaying">${esc(st.title)}</div>
+      <div class="row" style="gap:18px;margin-top:8px">
+        <div><span style="font-size:26px;font-weight:650">${fmtN(st.listeners)}</span> <span class="muted">ascultători${st.max_listeners ? " / max " + fmtN(st.max_listeners) : ""}</span></div>
+        <div class="muted">vârf azi: <b style="color:var(--text-primary)">${fmtN(st.peak_today)}</b></div>
+      </div>
+      <div class="levels">
+        <span>Studio</span><div class="meter"><div style="width:${L ? dbToPct(L.peak_db) : 0}%"></div></div><span class="mono">${L ? L.peak_db + " dB" : "—"}</span>
+        <span>Ieșire</span><div class="meter"><div style="width:${dbToPct(st.out_peak_db)}%"></div></div><span class="mono">${st.out_peak_db} dB</span>
+      </div>
+      <div class="meta">
+        <div>Studio</div><div>${L ? `<span class="badge ok">conectat</span> ${esc(L.ip)} · ${esc(L.agent)} · ${esc(L.proto)}${L.bitrate ? " · " + esc(L.bitrate) + " kbps" : ""} · de ${fmtDur(Date.now() / 1000 - L.since)}${L.silent ? ' · <b style="color:var(--warning)">⚠ liniște</b>' : ""}${L.underruns ? ` · <span title="întreruperi scurte ale conexiunii studioului">${L.underruns} sughițări</span>` : ""}` : '<span class="badge off">neconectat</span>'}</div>
+        ${A ? `<div>AutoDJ</div><div>${fmtN(A.files)} piese, ${fmtN(A.jingles)} jingle-uri${A.next ? ` · urmează: <i>${esc(A.next)}</i>` : ""}</div>` : `<div>AutoDJ</div><div class="muted">dezactivat</div>`}
+        <div>Mounturi</div><div>${st.mounts.map(m => `<a href="${esc(m.mount)}" target="_blank">${esc(m.mount)}</a> <span class="muted">${m.codec.toUpperCase()} ${m.bitrate}k · ${m.listeners}</span>`).join(" &nbsp; ")}</div>
+      </div>
+      <div class="row" style="margin-top:14px">
+        ${A ? `<button class="btn sm" onclick="skip(${st.id})">⏭ Skip AutoDJ</button>` : ""}
+        ${L ? `<button class="btn sm danger" onclick="kickSource(${st.id})">Deconectează studioul</button>` : ""}
+        <button class="btn sm" onclick="studioInfo(${st.id})">Date conectare studio</button>
+        <a class="btn sm" href="/s/${esc(st.slug)}" target="_blank">Player public ↗</a>
+        <a class="btn sm" href="/manager#${st.id}" target="_blank">Statistici ↗</a>
+      </div></div>`;
+  }).join("") + d.stopped.map(s => `<div class="card"><div class="card-head"><h2>${esc(s.name)}</h2><span class="badge off">dezactivat</span></div><p class="muted">Postul este oprit. Îl activezi din tab-ul Posturi.</p></div>`).join("");
+}
+async function skip(id) { try { await api("POST", `/api/admin/stations/${id}/skip`); toast("Piesa a fost sărită"); } catch (e) { fail(e); } }
+async function kickSource(id) { if (await confirmBox("Deconectezi sursa live (studioul)? Encoderul lor se va reconecta automat dacă are reconectare activată.")) try { await api("POST", `/api/admin/stations/${id}/kick-source`); } catch (e) { fail(e); } }
+
+/* ================= POSTURI ================= */
+async function loadStations() {
+  STATIONS = await api("GET", "/api/admin/stations");
+  $("#st-list").innerHTML = STATIONS.map(s => `<tr>
+    <td><b>${esc(s.name)}</b><div class="muted small">${esc(s.genre || "")}</div></td>
+    <td class="mono">/${esc(s.slug)}</td>
+    <td class="small">${s.outputs.map(o => `${o.codec.toUpperCase()} ${o.bitrate}k <span class="muted">/${esc(s.slug + o.mount)}</span>`).join("<br>")}</td>
+    <td>${s.enabled ? '<span class="badge ok">activ</span>' : '<span class="badge off">oprit</span>'}</td>
+    <td>${s.autodj ? "da" : "nu"}</td>
+    <td class="right nowrap"><button class="btn sm" onclick="studioInfo(${s.id})">Date studio</button>
+      <button class="btn sm" onclick="editStation(${s.id})">Editează</button>
+      <button class="btn sm" onclick="restartSt(${s.id})">Repornește</button>
+      <button class="btn sm danger" onclick="delStation(${s.id})">Șterge</button></td></tr>`).join("");
+}
+$("#addSt").onclick = () => editStation(null);
+async function restartSt(id) { try { await api("POST", `/api/admin/stations/${id}/restart`); toast("Post repornit"); } catch (e) { fail(e); } }
+async function delStation(id) {
+  const s = STATIONS.find(x => x.id === id);
+  if (!await confirmBox(`Ștergi postul „${s.name}”? Fișierele AutoDJ rămân pe disc.`)) return;
+  try { await api("DELETE", `/api/admin/stations/${id}`); loadStations(); } catch (e) { fail(e); }
+}
+
+function outRow(o) {
+  return `<div class="out-row"><input placeholder="sufix (gol = principal)" value="${esc(o.mount || "")}" data-k="mount">
+    <select data-k="codec"><option value="mp3"${o.codec === "mp3" ? " selected" : ""}>MP3</option><option value="aac"${o.codec === "aac" ? " selected" : ""}>AAC</option></select>
+    <select data-k="bitrate">${[32, 48, 64, 96, 128, 160, 192, 256, 320].map(b => `<option${+o.bitrate === b ? " selected" : ""}>${b}</option>`).join("")}</select>
+    <button class="btn sm danger" type="button" onclick="this.parentNode.remove()">✕</button></div>`;
+}
+
+async function editStation(id) {
+  if (!STATIONS.length) STATIONS = await api("GET", "/api/admin/stations");
+  const s = id ? STATIONS.find(x => x.id === id) : {name: "", slug: "", genre: "", description: "", website: "", source_pass: "", max_listeners: 1000, enabled: 1, autodj: 1, shuffle: 1, crossfade: 3, jingle_every: 4, silence_secs: 0, outputs: [{mount: "", codec: "mp3", bitrate: 128}, {mount: ".aac", codec: "aac", bitrate: 64}]};
+  modal(`<h2>${id ? "Editează postul" : "Post nou"}</h2>
+   <div class="grid g2">
+     <label class="f">Nume post<input id="e-name" value="${esc(s.name)}"></label>
+     <label class="f">Slug (apare în link: /slug)<input id="e-slug" value="${esc(s.slug)}" placeholder="automat din nume"></label>
+     <label class="f">Gen muzical<input id="e-genre" value="${esc(s.genre)}"></label>
+     <label class="f">Website<input id="e-website" value="${esc(s.website)}"></label>
+     <label class="f" style="grid-column:1/-1">Descriere<input id="e-description" value="${esc(s.description)}"></label>
+     <label class="f">Parola sursei (pentru studio)<div class="row" style="flex-wrap:nowrap"><input id="e-source_pass" value="${esc(s.source_pass)}" placeholder="generată automat" style="flex:1"><button class="btn sm" type="button" id="e-gen">Generează</button></div></label>
+     <label class="f">Număr maxim ascultători (0 = nelimitat)<input id="e-max_listeners" type="number" min="0" value="${s.max_listeners}"></label>
+   </div>
+   <h3 style="margin-top:16px">Ieșiri (stream-uri pentru ascultători)</h3>
+   <p class="muted small">Toate ieșirile primesc același sunet. Sufixul se adaugă la mount: gol → /slug, „.aac” → /slug.aac, „-hq” → /slug-hq.</p>
+   <div id="e-outs">${s.outputs.map(outRow).join("")}</div>
+   <button class="btn sm" type="button" id="e-addout">+ ieșire</button>
+   <h3 style="margin-top:16px">AutoDJ și comportament</h3>
+   <div class="grid g2">
+     <label class="chk"><input type="checkbox" id="e-enabled" ${s.enabled ? "checked" : ""}> Post activ</label>
+     <label class="chk"><input type="checkbox" id="e-autodj" ${s.autodj ? "checked" : ""}> AutoDJ activ (rezervă când studioul nu emite)</label>
+     <label class="chk"><input type="checkbox" id="e-shuffle" ${s.shuffle ? "checked" : ""}> Ordine aleatoare (shuffle)</label>
+     <span></span>
+     <label class="f">Crossfade (secunde, 0 = fără)<input id="e-crossfade" type="number" step="0.5" min="0" max="10" value="${s.crossfade}"></label>
+     <label class="f">Jingle după fiecare N piese (0 = niciodată)<input id="e-jingle_every" type="number" min="0" value="${s.jingle_every}"></label>
+     <label class="f" style="grid-column:1/-1">Detectare liniște pe studio: trece pe AutoDJ după N secunde de liniște (0 = dezactivat)<input id="e-silence_secs" type="number" min="0" value="${s.silence_secs}"></label>
+   </div>
+   ${id ? `<h3 style="margin-top:16px">Logo (pentru player public)</h3><div class="row"><img src="/logo/${esc(s.slug)}?${Date.now()}" style="width:56px;height:56px;border-radius:8px;object-fit:cover;background:var(--surface-2)"><input type="file" id="e-logo" accept="image/*"></div>` : ""}
+   <div class="actions"><button class="btn" data-close>Anulează</button><button class="btn primary" id="e-save">Salvează</button></div>`,
+  (m, close) => {
+    $("#e-gen", m).onclick = () => { const a = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"; $("#e-source_pass", m).value = Array.from(crypto.getRandomValues(new Uint32Array(10)), x => a[x % a.length]).join(""); };
+    $("#e-addout", m).onclick = () => $("#e-outs", m).insertAdjacentHTML("beforeend", outRow({mount: "-" + Math.random().toString(36).slice(2, 5), codec: "mp3", bitrate: 64}));
+    $("#e-save", m).onclick = async () => {
+      const v = k => $("#e-" + k, m).value, c = k => $("#e-" + k, m).checked ? 1 : 0;
+      const body = {name: v("name"), slug: v("slug"), genre: v("genre"), website: v("website"), description: v("description"),
+        source_pass: v("source_pass"), max_listeners: +v("max_listeners"), enabled: c("enabled"), autodj: c("autodj"), shuffle: c("shuffle"),
+        crossfade: +v("crossfade"), jingle_every: +v("jingle_every"), silence_secs: +v("silence_secs"),
+        outputs: $$(".out-row", m).map(r => ({mount: $("[data-k=mount]", r).value.trim(), codec: $("[data-k=codec]", r).value, bitrate: +$("[data-k=bitrate]", r).value}))};
+      try {
+        const r = id ? await api("PUT", `/api/admin/stations/${id}`, body) : await api("POST", "/api/admin/stations", body);
+        const logo = $("#e-logo", m);
+        if (logo && logo.files[0]) await api("POST", `/api/admin/stations/${id}/logo`, logo.files[0], true);
+        toast(r.restarted ? "Salvat (postul a fost repornit)" : "Salvat");
+        close(); loadStations();
+      } catch (e) { fail(e); }
+    };
+  });
+}
+
+async function studioInfo(id) {
+  const all = await api("GET", "/api/admin/stations");
+  const s = all.find(x => x.id === id);
+  const set = await api("GET", "/api/admin/settings");
+  let host = location.hostname;
+  if (set.public_url) try { host = new URL(set.public_url).hostname; } catch (e) {}
+  const port = set.port;
+  const row = (k, v) => `<tr><td class="muted">${k}</td><td class="mono"><span>${esc(v)}</span> <button class="btn sm" onclick="copyText('${esc(String(v)).replace(/'/g, "\\'")}')">copiază</button></td></tr>`;
+  const txt = `Date conectare emisie ${s.name}\n\nVarianta Icecast (recomandat):\n  Server: ${host}\n  Port: ${port}\n  Mount: /${s.slug}\n  Utilizator: source\n  Parola: ${s.source_pass}\n\nVarianta SHOUTcast (v1 / legacy):\n  Server: ${host}\n  Port: ${port}\n  Parola: ${s.source_pass}\n\nFormat recomandat: MP3 128-192 kbps (sau AAC), 44.1 kHz, stereo.\nActivați reconectarea automată în programul de emisie.`;
+  modal(`<h2>Date conectare studio – ${esc(s.name)}</h2>
+   <p class="muted">Acestea se trec în programul de emisie al studioului (RadioBOSS, SAM Broadcaster, Mixxx, BUTT, mixer cu encoder etc.). Studioul doar trimite sunet, nu are acces la server.</p>
+   <h3>Icecast (recomandat)</h3><table class="studio-box">${row("Server", host)}${row("Port", port)}${row("Mount", "/" + s.slug)}${row("Utilizator", "source")}${row("Parolă", s.source_pass)}</table>
+   <h3 style="margin-top:14px">SHOUTcast v1 / legacy</h3><table class="studio-box">${row("Server", host)}${row("Port", port)}${row("Parolă", s.source_pass)}</table>
+   <p class="muted small">La SHOUTcast, encoderul folosește automat și portul ${port + 1}. Ambele porturi trebuie deschise în firewall.</p>
+   <div class="actions"><button class="btn" id="cpAll">Copiază tot textul</button><button class="btn primary" data-close>Închide</button></div>`,
+   m => $("#cpAll", m).onclick = () => copyText(txt));
+}
+
+/* ================= AUTODJ ================= */
+async function loadAutodj() {
+  STATIONS = await api("GET", "/api/admin/stations");
+  const sel = $("#adj-st"), prev = sel.value;
+  sel.innerHTML = STATIONS.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
+  if (prev) sel.value = prev;
+  sel.onchange = () => { renderFiles("music"); renderFiles("jingles"); refreshAdjNow(); };
+  renderFiles("music"); renderFiles("jingles"); refreshAdjNow();
+}
+$("#adj-skip").onclick = () => skip(+$("#adj-st").value).then(() => setTimeout(refreshAdjNow, 500));
+async function refreshAdjNow() {
+  const id = +$("#adj-st").value;
+  try {
+    const d = await api("GET", "/api/admin/overview");
+    const st = d.stations.find(s => s.id === id);
+    $("#adj-now").innerHTML = !st ? "Post oprit" : st.autodj ? `${modeBadge(st.mode)} &nbsp; ▶ <b>${esc(st.autodj.current || "—")}</b>${st.autodj.current_dur ? ` <span class="muted">${fmtDur(st.autodj.current_pos)} / ${fmtDur(st.autodj.current_dur)}</span>` : ""}<br><span class="muted">urmează: ${esc(st.autodj.next || "—")}</span>` : "AutoDJ dezactivat pentru acest post";
+  } catch (e) {}
+}
+async function renderFiles(type) {
+  const id = +$("#adj-st").value, box = $(type === "music" ? "#box-music" : "#box-jingles");
+  const d = await api("GET", `/api/admin/stations/${id}/files?type=${type}`);
+  const total = d.files.reduce((a, f) => a + f.size, 0);
+  box.innerHTML = `<div class="card-head"><h2>${type === "music" ? "Muzică" : "Jingle-uri"} <span class="muted">(${d.files.length})</span></h2><span class="muted small">${fmtBytes(total)} · liber ${fmtBytes(d.free)}</span></div>
+    <div class="drop" data-drop>Trage fișierele aici sau <u>alege fișiere</u><br><span class="small">MP3, AAC, M4A, OGG, FLAC, WAV · se pot urca și prin SFTP în <span class="mono">${esc(d.dir)}</span></span><input type="file" multiple accept="audio/*,.mp3,.aac,.m4a,.ogg,.opus,.flac,.wav" class="hidden"></div>
+    <div class="upl small"></div>
+    <input placeholder="Caută..." class="flt" style="width:100%;margin:10px 0">
+    <div class="table-wrap" style="max-height:440px"><table><tbody>${d.files.map(f => `<tr data-n="${esc(f.name.toLowerCase())}"><td style="word-break:break-all">${esc(f.name)}</td><td class="num muted small nowrap">${fmtBytes(f.size)}</td><td class="right"><button class="btn sm danger" data-del="${esc(f.name)}">✕</button></td></tr>`).join("") || `<tr><td class="empty">Niciun fișier încă.</td></tr>`}</tbody></table></div>`;
+  const drop = $("[data-drop]", box), inp = $("input[type=file]", box);
+  drop.onclick = () => inp.click();
+  inp.onchange = () => upload(type, [...inp.files], box);
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); upload(type, [...e.dataTransfer.files], box); };
+  $(".flt", box).oninput = e => { const q = e.target.value.toLowerCase(); $$("tr[data-n]", box).forEach(r => r.classList.toggle("hidden", !r.dataset.n.includes(q))); };
+  $$("[data-del]", box).forEach(b => b.onclick = async () => {
+    if (!await confirmBox(`Ștergi „${b.dataset.del}”?`)) return;
+    try { await api("DELETE", `/api/admin/stations/${id}/files?type=${type}&name=${encodeURIComponent(b.dataset.del)}`); renderFiles(type); } catch (e) { fail(e); }
+  });
+}
+async function upload(type, files, box) {
+  const id = +$("#adj-st").value, out = $(".upl", box);
+  let done = 0;
+  for (const f of files) {
+    const row = document.createElement("div");
+    row.innerHTML = `${esc(f.name)} <div class="prog"><div></div></div>`;
+    out.appendChild(row);
+    await new Promise(res => {
+      const x = new XMLHttpRequest();
+      x.open("POST", `/api/admin/stations/${id}/files?type=${type}&name=${encodeURIComponent(f.name)}`);
+      x.upload.onprogress = e => { if (e.lengthComputable) $(".prog div", row).style.width = (100 * e.loaded / e.total) + "%"; };
+      x.onload = () => { if (x.status === 200) { done++; row.remove(); } else { row.innerHTML = `<span style="color:#ff8a8a">${esc(f.name)}: ${esc((JSON.parse(x.responseText || "{}").error) || x.status)}</span>`; } res(); };
+      x.onerror = () => { row.innerHTML = `<span style="color:#ff8a8a">${esc(f.name)}: eroare rețea</span>`; res(); };
+      x.send(f);
+    });
+  }
+  toast(`${done} fișier(e) urcate`);
+  renderFiles(type);
+}
+
+/* ================= ASCULTĂTORI ================= */
+async function loadListeners() {
+  try { lisData = await api("GET", "/api/admin/listeners"); } catch (e) { return; }
+  renderListeners();
+  if (!STATE.bansLoaded) { STATE.bansLoaded = true; loadBans(); }
+}
+$("#lis-filter").oninput = renderListeners;
+function renderListeners() {
+  const q = $("#lis-filter").value.toLowerCase();
+  const rows = lisData.filter(l => !q || [l.ip, l.country, countryName(l.country), l.player, l.os, l.ua, l.station].join(" ").toLowerCase().includes(q));
+  $("#lis-count").textContent = `(${lisData.length})`;
+  $("#lis-list").innerHTML = rows.map(l => `<tr>
+    <td>${esc(l.station)}<div class="muted small mono">${esc(l.mount)}</div></td>
+    <td class="mono">${esc(l.ip)}</td>
+    <td>${flag(l.country)} ${esc(countryName(l.country))}</td>
+    <td>${esc(l.device)} · ${esc(l.player)}<div class="muted small" style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(l.ua)}">${esc(l.ua)}</div></td>
+    <td class="num">${fmtDur(l.duration)}</td><td class="num">${fmtBytes(l.sent)}</td>
+    <td class="right nowrap"><button class="btn sm" onclick="kick(${l.id})">Kick</button> <button class="btn sm danger" onclick="ban(${l.id})">Ban</button></td></tr>`).join("") || `<tr><td colspan="7" class="empty">Niciun ascultător conectat.</td></tr>`;
+}
+async function kick(id) { try { await api("POST", `/api/admin/listeners/${id}/kick`); loadListeners(); } catch (e) { fail(e); } }
+async function ban(id) { if (await confirmBox("Blochezi IP-ul acestui ascultător?")) try { await api("POST", `/api/admin/listeners/${id}/ban`); loadListeners(); loadBans(); } catch (e) { fail(e); } }
+async function loadBans() {
+  const b = await api("GET", "/api/admin/bans");
+  $("#ban-list").innerHTML = b.map(x => `<tr><td class="mono">${esc(x.ip)}</td><td>${esc(x.reason)}</td><td>${fmtDT(x.created)}</td><td class="right"><button class="btn sm" onclick="unban('${esc(x.ip)}')">Deblochează</button></td></tr>`).join("") || `<tr><td colspan="4" class="muted">Niciun IP blocat.</td></tr>`;
+}
+$("#ban-add").onclick = async () => { try { await api("POST", "/api/admin/bans", {ip: $("#ban-ip").value, reason: $("#ban-reason").value}); $("#ban-ip").value = ""; loadBans(); } catch (e) { fail(e); } };
+async function unban(ip) { try { await api("DELETE", "/api/admin/bans", {ip}); loadBans(); } catch (e) { fail(e); } }
+
+/* ================= UTILIZATORI ================= */
+async function loadUsers() {
+  STATIONS = await api("GET", "/api/admin/stations");
+  const us = await api("GET", "/api/admin/users");
+  $("#user-list").innerHTML = us.map(u => `<tr><td><b>${esc(u.username)}</b></td><td>${u.role === "admin" ? "Administrator" : "Manager post"}</td>
+    <td>${u.role === "manager" ? `<select onchange="setUserStation(${u.id}, this.value)">${STATIONS.map(s => `<option value="${s.id}"${s.id === u.station_id ? " selected" : ""}>${esc(s.name)}</option>`).join("")}</select>` : '<span class="muted">toate</span>'}</td>
+    <td>${u.created ? fmtDate(u.created) : ""}</td>
+    <td class="right nowrap"><button class="btn sm" onclick="resetPw(${u.id}, '${esc(u.username)}')">Resetează parola</button> <button class="btn sm danger" onclick="delUser(${u.id}, '${esc(u.username)}')">Șterge</button></td></tr>`).join("");
+}
+async function setUserStation(id, sid) { try { await api("PUT", `/api/admin/users/${id}`, {station_id: +sid}); toast("Salvat"); } catch (e) { fail(e); } }
+function showCreds(user, pw) {
+  const base = location.origin;
+  const txt = `Acces statistici radio\nAdresa: ${base}/manager\nUtilizator: ${user}\nParola: ${pw}`;
+  modal(`<h2>Date de acces</h2><p class="muted">Parola se afișează o singură dată. Trimite-le managerului:</p><pre class="card mono" style="white-space:pre-wrap">${esc(txt)}</pre><div class="actions"><button class="btn" id="cp">Copiază</button><button class="btn primary" data-close>Gata</button></div>`, m => $("#cp", m).onclick = () => copyText(txt));
+}
+async function resetPw(id, user) {
+  if (!await confirmBox(`Generezi o parolă nouă pentru ${user}?`)) return;
+  try { const r = await api("PUT", `/api/admin/users/${id}`, {reset_password: true}); showCreds(user, r.password); } catch (e) { fail(e); }
+}
+async function delUser(id, user) { if (await confirmBox(`Ștergi contul ${user}?`)) try { await api("DELETE", `/api/admin/users/${id}`); loadUsers(); } catch (e) { fail(e); } }
+$("#addUser").onclick = async () => {
+  STATIONS = await api("GET", "/api/admin/stations");
+  modal(`<h2>Cont nou</h2><div class="grid" style="gap:12px">
+    <label class="f">Utilizator<input id="u-name" placeholder="ex: manager.radio1"></label>
+    <label class="f">Rol<select id="u-role"><option value="manager">Manager post (doar statistici)</option><option value="admin">Administrator (acces complet)</option></select></label>
+    <label class="f" id="u-stw">Post<select id="u-st">${STATIONS.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join("")}</select></label>
+    <label class="f">Parolă (gol = generată automat)<input id="u-pw"></label></div>
+    <div class="actions"><button class="btn" data-close>Anulează</button><button class="btn primary" id="u-save">Creează</button></div>`,
+  (m, close) => {
+    $("#u-role", m).onchange = e => $("#u-stw", m).classList.toggle("hidden", e.target.value !== "manager");
+    $("#u-save", m).onclick = async () => {
+      try {
+        const name = $("#u-name", m).value.trim();
+        const r = await api("POST", "/api/admin/users", {username: name, role: $("#u-role", m).value, station_id: +$("#u-st", m).value, password: $("#u-pw", m).value});
+        close(); loadUsers(); showCreds(name, r.password);
+      } catch (e) { fail(e); }
+    };
+  });
+};
+
+/* ================= EVENIMENTE ================= */
+const EVN = {source_connect: "🟢 Studio conectat", source_disconnect: "🔴 Studio deconectat", source_kick: "⛔ Studio deconectat de admin", silence: "⚠ Liniște pe emisie", config: "⚙ Configurare"};
+async function loadEvents() {
+  const d = await api("GET", "/api/admin/events");
+  $("#ev-list").innerHTML = d.events.map(e => `<tr><td class="nowrap">${fmtDT(e.ts)}</td><td>${esc(e.station || "")}</td><td class="nowrap">${EVN[e.type] || esc(e.type)}</td><td class="small">${esc(e.detail)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">Niciun eveniment.</td></tr>`;
+  $("#log-list").innerHTML = d.log.map(l => `<div style="padding:3px 0;border-bottom:1px solid var(--border);${l.level === "error" ? "color:#ff8a8a" : l.level === "warn" ? "color:var(--warning)" : ""}">${fmtDT(Math.floor(l.ts))} ${l.station ? "[" + esc(l.station) + "] " : ""}${esc(l.msg)}</div>`).join("");
+}
+$("#ev-refresh").onclick = loadEvents;
+
+/* ================= SETĂRI ================= */
+async function loadSettings() {
+  const s = await api("GET", "/api/admin/settings");
+  ["public_url", "timezone", "telegram_token", "telegram_chat", "retention_days"].forEach(k => $("#s-" + k).value = s[k] || "");
+  $("#geo-status").textContent = s.geoip_age_days == null ? "Baza GeoIP nu este încă descărcată (țările vor apărea ca „Necunoscut”)." : `Baza GeoIP actualizată acum ${Math.round(s.geoip_age_days)} zile.`;
+}
+async function saveSettings() {
+  const b = {};
+  ["public_url", "timezone", "telegram_token", "telegram_chat", "retention_days"].forEach(k => b[k] = $("#s-" + k).value);
+  try { await api("PUT", "/api/admin/settings", b); toast("Setări salvate"); } catch (e) { fail(e); }
+}
+$("#s-save").onclick = saveSettings; $("#s-save2").onclick = saveSettings;
+$("#s-test").onclick = async () => { try { await api("POST", "/api/admin/test-alert"); toast("Mesaj de test trimis"); } catch (e) { fail(e); } };
+$("#geo-upd").onclick = async () => { toast("Se descarcă..."); try { const r = await api("POST", "/api/admin/geoip-update"); toast(r.ok ? "GeoIP actualizat" : "Descărcarea a eșuat (vezi jurnalul)", !r.ok); loadSettings(); } catch (e) { fail(e); } };
+$("#pw-save").onclick = async () => { try { await api("PUT", "/api/me/password", {old: $("#pw-old").value, new: $("#pw-new").value}); toast("Parola a fost schimbată"); $("#pw-old").value = $("#pw-new").value = ""; } catch (e) { fail(e); } };
+
+(async () => {
+  const me = await api("GET", "/api/me");
+  $("#me").textContent = me.username;
+  const h = location.hash.slice(1);
+  show(["dash", "stations", "autodj", "listeners", "users", "events", "settings"].includes(h) ? h : "dash");
+})();
+</script>
+</body></html>

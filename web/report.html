@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ro"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Raport audiență</title><link rel="icon" href="/static/logo.svg"><link rel="stylesheet" href="/static/app.css">
+<style>
+:root{color-scheme:light;--bg:#fff;--surface-1:#fcfcfb;--surface-2:#f4f4f2;--surface-3:#ececea;--border:#e2e1dc;--text-primary:#0b0b0b;--text-secondary:#52514e;--text-muted:#76756f;--series-1:#2a78d6;--series-1-fill:rgba(42,120,214,.14);--grid:#ececea}
+body{background:#fff}
+.page{max-width:960px;margin:0 auto;padding:30px}
+.rhead{display:flex;align-items:center;gap:16px;border-bottom:2px solid var(--text-primary);padding-bottom:14px;margin-bottom:20px}
+.rhead img{width:60px;height:60px;border-radius:10px;object-fit:cover}
+.rhead h1{margin:0;font-size:24px}.rhead p{margin:2px 0 0;color:var(--text-secondary)}
+.card{box-shadow:none;break-inside:avoid}
+section{margin-bottom:18px;break-inside:avoid}
+.toolbar{position:fixed;top:14px;right:14px}
+@media print{.toolbar{display:none}.page{padding:0}@page{margin:14mm}}
+</style></head>
+<body>
+<div class="toolbar"><button class="btn primary" onclick="window.print()">🖨 Tipărește / Salvează PDF</button></div>
+<div class="page">
+  <div class="rhead"><img id="logo" alt=""><div><h1 id="title">Raport de audiență</h1><p id="sub"></p></div></div>
+  <div id="body"><p class="muted">Se generează raportul...</p></div>
+</div>
+<script src="/static/common.js"></script>
+<script>
+(async () => {
+  const sid = location.pathname.split("/")[2];
+  const q = location.search.slice(1);
+  const [st, top, live] = await Promise.all([api("GET", `/api/station/${sid}/stats?${q}`), api("GET", `/api/station/${sid}/top?${q}`), api("GET", `/api/station/${sid}/live`)]);
+  setTZ(st.tz);
+  $("#logo").src = `/logo/${live.slug}`;
+  $("#title").textContent = `Raport de audiență – ${st.station}`;
+  $("#sub").textContent = `Perioada: ${fmtDate(st.from)} – ${fmtDate(Math.max(st.from, st.to - 1))} · generat ${fmtDT(Math.floor(Date.now() / 1000))}`;
+  document.title = `Raport ${st.station} ${fmtDate(st.from)}`;
+  const t = (l, v, s) => `<div class="card tile"><div class="label">${l}</div><div class="value" style="font-size:24px">${v}</div><div class="sub">${s || ""}</div></div>`;
+  const pv = st.prev || {};
+  const d = (a, b) => b ? `${a >= b ? "+" : ""}${Math.round(100 * (a - b) / b)}% față de perioada anterioară` : "";
+  const table = (head, rows) => `<table><thead><tr>${head.map(h => `<th${h[1] ? ' class="num"' : ""}>${h[0]}</th>`).join("")}</tr></thead><tbody>${rows.join("") || `<tr><td colspan="${head.length}" class="muted">—</td></tr>`}</tbody></table>`;
+  $("#body").innerHTML = `
+   <section class="grid g3">
+     ${t("Ore ascultate (TLH)", fmtN1(st.tlh), d(st.tlh, pv.tlh))}
+     ${t("Ascultători unici", fmtN(st.unique), d(st.unique, pv.unique))}
+     ${t("Medie ascultători / minut", fmtN1(st.avg_listeners), d(st.avg_listeners, pv.avg))}
+     ${t("Vârf simultan", fmtN(st.peak), st.peak_ts ? fmtDT(st.peak_ts) : "")}
+     ${t("Timp mediu de ascultare", fmtDur(st.avg_duration), "median " + fmtDur(st.median_duration))}
+     ${t("Sesiuni de ascultare", fmtN(st.sessions), "≥ 30 secunde")}
+   </section>
+   <section class="card"><h3>Media ascultătorilor</h3><div id="c1"></div></section>
+   <section class="grid g2"><div class="card"><h3>Media pe ore</h3><div id="c2"></div></div><div class="card"><h3>Media pe zilele săptămânii</h3><div id="c3"></div></div></section>
+   <section class="grid g2"><div class="card"><h3>Țări</h3><div id="cc"></div></div><div class="card"><h3>Dispozitive</h3><div id="dv"></div><h3 style="margin-top:12px">Playere</h3><div id="pl"></div></div></section>
+   ${st.shows.length ? `<section class="card"><h3>Audiența emisiunilor</h3>${table([["Emisiune"], ["Zile"], ["Interval"], ["Medie", 1], ["Vârf", 1], ["TLH", 1]],
+      st.shows.sort((a, b) => b.avg - a.avg).map(s => `<tr><td>${esc(s.name)}${s.host ? ` <span class="muted">(${esc(s.host)})</span>` : ""}</td><td>${String(s.days).split(",").map(x => WD[+x - 1]).join(", ")}</td><td>${s.start}–${s.end}</td><td class="num">${fmtN1(s.avg)}</td><td class="num">${s.peak}</td><td class="num">${fmtN1(s.tlh)}</td></tr>`))}</section>` : ""}
+   <section class="card"><h3>Audiență pe zile</h3>${table([["Ziua"], ["Ore ascultate", 1], ["Unici", 1], ["Medie", 1], ["Vârf", 1]],
+      st.daily.map(x => `<tr><td>${x.day.split("-").reverse().join(".")}</td><td class="num">${fmtN1(x.tlh)}</td><td class="num">${fmtN(x.unique)}</td><td class="num">${fmtN1(x.avg)}</td><td class="num">${x.peak}</td></tr>`))}</section>
+   <section class="card"><h3>Cele mai difuzate piese</h3>${table([["#"], ["Piesă"], ["Difuzări", 1], ["Medie ascultători", 1]],
+      top.slice(0, 25).map((s, i) => `<tr><td>${i + 1}</td><td>${esc(s.title)}</td><td class="num">${s.plays}</td><td class="num">${fmtN1(s.avg_listeners)}</td></tr>`))}</section>
+   <p class="muted small">Ore ascultate (TLH) = totalul orelor ascultate de toți ascultătorii. Ascultători unici = adrese IP distincte cu cel puțin 30 s de ascultare. Geolocație: DB-IP.</p>`;
+  const daily = st.step === 86400;
+  lineChart($("#c1"), st.series.map(s => ({t: s.t, v: s.avg, extra: `vârf: ${s.max}`})), {fmtX: daily || st.step === 3600 ? fmtDay : fmtTime, fmtTip: daily ? fmtDay : fmtDT, height: 220, unit: "ascultători"});
+  barChart($("#c2"), st.hours.map((_, h) => String(h).padStart(2, "0")), st.hours, {height: 170, unit: "ascultători"});
+  barChart($("#c3"), WD, st.weekdays, {tipLabels: WD_FULL, height: 170, unit: "ascultători"});
+  barList($("#cc"), st.countries.slice(0, 10).map(c => ({label: countryName(c.code), html: `${flag(c.code)} ${esc(countryName(c.code))}`, value: c.tlh, sub: c.pct + "%"})), {fmt: v => fmtN1(v) + " h"});
+  barList($("#dv"), st.devices.map(([k, n]) => ({label: k, value: n})));
+  barList($("#pl"), st.players.slice(0, 6).map(([k, n]) => ({label: k, value: n})));
+})().catch(e => $("#body").innerHTML = `<p>Eroare: ${esc(e.message)}</p>`);
+</script>
+</body></html>
