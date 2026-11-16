@@ -45,7 +45,10 @@ class PlaybackService : MediaLibraryService() {
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private var retries = 0
-    private val sleepRunnable = Runnable { player.stop() }
+    private val sleepRunnable = Runnable {
+        player.stop()
+        Stations.prefs(this).edit().putLong("sleep_until", 0).apply()
+    }
 
     override fun onCreate() {
         super.onCreate()

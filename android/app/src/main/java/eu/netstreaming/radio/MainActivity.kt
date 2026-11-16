@@ -1,6 +1,7 @@
 package eu.netstreaming.radio
 
 import android.content.ComponentName
+import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -85,6 +86,9 @@ class MainActivity : AppCompatActivity() {
         swipe.setColorSchemeColors(ContextCompat.getColor(this, R.color.accent))
         swipe.setOnRefreshListener { load(true) }
 
+        findViewById<View>(R.id.mini).setOnClickListener {
+            if (controller?.currentMediaItem != null) openPlayer()
+        }
         miniPlay.setOnClickListener {
             val c = controller ?: return@setOnClickListener
             if (c.isPlaying || c.playbackState == Player.STATE_BUFFERING) {
@@ -148,6 +152,12 @@ class MainActivity : AppCompatActivity() {
         c.play()
         Stations.prefs(this).edit().putString("last", s.slug).apply()
         updateMini()
+        openPlayer()
+    }
+
+    private fun openPlayer() {
+        startActivity(Intent(this, PlayerActivity::class.java))
+        overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
     }
 
     private fun updateMini() {
@@ -181,10 +191,7 @@ class MainActivity : AppCompatActivity() {
         val opts = arrayOf("Dezactivat", "15 minute", "30 minute", "45 minute", "60 minute", "90 minute")
         val mins = intArrayOf(0, 15, 30, 45, 60, 90)
         AlertDialog.Builder(this).setTitle(R.string.sleep).setItems(opts) { _, i ->
-            val args = Bundle().apply { putInt(PlaybackService.ARG_MINUTES, mins[i]) }
-            controller?.sendCustomCommand(SessionCommand(PlaybackService.CMD_SLEEP, Bundle.EMPTY), args)
-            Toast.makeText(this, if (mins[i] == 0) "Oprire automată dezactivată" else "Se oprește în ${mins[i]} minute",
-                Toast.LENGTH_SHORT).show()
+            PlayerActivity.setSleep(this, controller, mins[i])
         }.show()
     }
 
