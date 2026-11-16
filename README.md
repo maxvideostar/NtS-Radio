@@ -69,3 +69,15 @@ cd /opt/nts-radio && sudo git pull && sudo bash https-setup.sh radio.domeniu.ro 
 - Certificatul se reînnoiește automat, iar adresa publică din NtS-Radio se setează pe `https://`.
 - Studioul rămâne conectat direct pe 8000 / 8001.
 - Configurare manuală: `contrib/nginx-nts-radio.conf`.
+
+## Jingle-uri cu voce naturală
+
+Generează jingle-uri cu voce neurală (Microsoft Edge TTS), mixate peste fundalurile muzicale din `contrib/jingles/beds`. Rulează pe server, are nevoie de internet:
+
+```bash
+cd /opt/nts-radio && sudo git pull && sudo STATION=radio bash contrib/jingles/make-jingles.sh "NetStreaming. Streaming services."
+```
+
+- `VOICE=en-US-GuyNeural` sau `ro-RO-EmilNeural` schimbă vocea
+- `VOICE_FILE=voce.mp3` folosește o înregistrare proprie
+- `STATION=<slug>` copiază jingle-urile direct în AutoDJ-ul postului
