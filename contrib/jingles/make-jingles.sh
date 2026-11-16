@@ -36,8 +36,13 @@ if [ -n "$VOICE_FILE" ]; then
 else
   if [ ! -x "$VENV/bin/edge-tts" ]; then
     echo "==> Instalez edge-tts (o singură dată)"
-    if ! python3 -m venv "$VENV" 2>/dev/null; then
-      apt-get install -y -qq python3-venv >/dev/null && python3 -m venv "$VENV"
+    rm -rf "$VENV"
+    if ! python3 -m venv "$VENV" >/dev/null 2>&1; then
+      rm -rf "$VENV"
+      PYV=$(python3 -c 'import sys;print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
+      echo "    instalez python3-venv..."
+      apt-get install -y python3-venv "python${PYV}-venv" || apt-get install -y python3-venv
+      python3 -m venv "$VENV"
     fi
     "$VENV/bin/pip" install -q --upgrade pip edge-tts
   fi
