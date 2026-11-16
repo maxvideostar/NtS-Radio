@@ -311,11 +311,13 @@ async function editStation(id) {
    <p class="muted small">Postul este trimis automat către alte servere: Icecast / SHOUTcast (rezervă, platforme, agregatoare) sau RTMP (YouTube / Facebook live). Reconectare automată.</p>
    <div id="e-pushes">${(s.pushes || []).map(p => pushRow(p, s.outputs)).join("")}</div>
    <button class="btn sm" type="button" id="e-addpush">+ retransmisie</button>
-   ${id ? `<h3 style="margin-top:16px">Logo (pentru player public)</h3><div class="row"><img src="/logo/${esc(s.slug)}?${Date.now()}" style="width:56px;height:56px;border-radius:8px;object-fit:cover;background:var(--surface-2)"><input type="file" id="e-logo" accept="image/*"></div>` : ""}
+   ${id ? `<h3 style="margin-top:16px">Logo (pentru player public)</h3><div class="row"><img src="/logo/${esc(s.slug)}?${Date.now()}" style="width:56px;height:56px;border-radius:8px;object-fit:cover;background:var(--surface-2)"><input type="file" id="e-logo" accept="image/*"></div>
+   <h3 style="margin-top:16px">Imagine afișată în player cât rulează un jingle</h3><div class="row"><img src="/jingle-image/${esc(s.slug)}?${Date.now()}" style="width:56px;height:56px;border-radius:8px;object-fit:cover;background:var(--surface-2)"><input type="file" id="e-jimg" accept="image/png,image/jpeg,image/webp"><button class="btn sm" type="button" id="e-jimg-reset">Revino la imaginea implicită</button></div>` : ""}
    <div class="actions"><button class="btn" data-close>Anulează</button><button class="btn primary" id="e-save">Salvează</button></div>`,
   (m, close) => {
     $("#e-gen", m).onclick = () => { const a = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"; $("#e-source_pass", m).value = Array.from(crypto.getRandomValues(new Uint32Array(10)), x => a[x % a.length]).join(""); };
     wirePushRows(m);
+    if ($("#e-jimg-reset", m)) $("#e-jimg-reset", m).onclick = async () => { try { await api("DELETE", `/api/admin/stations/${id}/jingle-image`); toast("Se folosește imaginea implicită netstreaming.eu"); } catch (e) { fail(e); } };
     $("#e-addsched", m).onclick = () => $("#e-sched", m).insertAdjacentHTML("beforeend", schedRow({}));
     $("#e-addpush", m).onclick = () => {
       const outs = $$(".out-row", m).map(r => ({mount: $("[data-k=mount]", r).value.trim(), codec: $("[data-k=codec]", r).value, bitrate: +$("[data-k=bitrate]", r).value}));
@@ -340,6 +342,8 @@ async function editStation(id) {
         const r = id ? await api("PUT", `/api/admin/stations/${id}`, body) : await api("POST", "/api/admin/stations", body);
         const logo = $("#e-logo", m);
         if (logo && logo.files[0]) await api("POST", `/api/admin/stations/${id}/logo`, logo.files[0], true);
+        const jimg = $("#e-jimg", m);
+        if (jimg && jimg.files[0]) await api("POST", `/api/admin/stations/${id}/jingle-image`, jimg.files[0], true);
         toast(r.restarted ? "Salvat (postul a fost repornit)" : "Salvat");
         close(); loadStations();
       } catch (e) { fail(e); }

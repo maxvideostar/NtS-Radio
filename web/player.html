@@ -66,7 +66,7 @@ if (embed) document.body.classList.add("embed");
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const audio = $("audio");
-let info = null, playing = false, lastTitle = null, logo = "";
+let info = null, playing = false, lastTitle = null, logo = "", jingleUntil = 0, songCover = null, shown = null;
 const ICON_PLAY = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
 const ICON_STOP = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
 const ICON_LOAD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="9" stroke-dasharray="40 20"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></circle></svg>';
@@ -80,7 +80,10 @@ $("play").onclick = () => {
   if (playing) { audio.pause(); audio.removeAttribute("src"); audio.load(); playing = false; $("play").innerHTML = ICON_PLAY; return; }
   audio.src = pickStream() + "?t=" + Date.now();
   $("play").innerHTML = ICON_LOAD;
-  audio.play().then(() => { playing = true; $("play").innerHTML = ICON_STOP; }).catch(() => { $("play").innerHTML = ICON_PLAY; });
+  audio.play().then(() => {
+    playing = true; $("play").innerHTML = ICON_STOP;
+    if (info && info.intro_secs > 0) { jingleUntil = Date.now() + (info.intro_secs + 1.5) * 1000; showArt(); setTimeout(showArt, (info.intro_secs + 1.6) * 1000); }
+  }).catch(() => { $("play").innerHTML = ICON_PLAY; });
 };
 audio.onerror = () => { if (playing) { setTimeout(() => { if (playing) { audio.src = pickStream() + "?t=" + Date.now(); audio.play().catch(() => {}); } }, 2000); } };
 $("vol").oninput = e => { audio.volume = e.target.value; try { localStorage.setItem("vol", e.target.value); } catch (er) {} };
@@ -94,6 +97,15 @@ async function cover(title) {
     if (j.results && j.results[0]) return j.results[0].artworkUrl100.replace("100x100", "600x600");
   } catch (e) {}
   return logo;
+}
+function showArt() {
+  if (!info) return;
+  const jingle = info.jingle || Date.now() < jingleUntil;
+  const c = jingle ? info.jingle_image : (songCover || logo);
+  if (c === shown) return;
+  shown = c;
+  $("cover").src = c; $("bg").style.backgroundImage = `url("${c}")`;
+  if ("mediaSession" in navigator) navigator.mediaSession.metadata = new MediaMetadata({title: jingle ? info.name : info.title, artist: info.name, artwork: [{src: c, sizes: "600x600"}]});
 }
 async function refresh() {
   try {
@@ -110,16 +122,15 @@ async function refresh() {
   if (info.title !== lastTitle) {
     lastTitle = info.title;
     $("np").textContent = info.title;
-    const c = await cover(info.title);
-    $("cover").src = c; $("bg").style.backgroundImage = `url("${c}")`;
-    if ("mediaSession" in navigator) navigator.mediaSession.metadata = new MediaMetadata({title: info.title, artist: info.name, artwork: [{src: c, sizes: "600x600"}]});
+    songCover = await cover(info.title);
   }
+  showArt();
   $("hist").innerHTML = info.history.map(h => `<div><span>${new Date(h.ts * 1000).toLocaleTimeString("ro-RO", {hour: "2-digit", minute: "2-digit"})}</span>${esc(h.title)}</div>`).join("") || `<div><span>—</span></div>`;
   $("histbox").style.display = info.history.length ? "" : "none";
   $("links").innerHTML = `<a href="/listen/${slug}.m3u">Deschide în VLC / Winamp (.m3u)</a><a href="/listen/${slug}.pls">.pls</a>` +
     info.streams.map(s => `<a href="${esc(s.url)}" target="_blank">${s.codec.toUpperCase()} ${s.bitrate}k</a>`).join("") +
     (info.website ? `<a href="${esc(info.website)}" target="_blank">Website</a>` : "");
 }
-refresh(); setInterval(refresh, 10000);
+refresh(); setInterval(refresh, 5000);
 </script>
 </body></html>

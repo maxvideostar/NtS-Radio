@@ -792,6 +792,19 @@ class Station:
                 return None
         return self.intro_cache.get(k)
 
+    @property
+    def jingle_playing(self):
+        a = self.autodj
+        return self.mode == "autodj" and bool((a.cur and a.cur.jingle) or (a.next and a.next.jingle and a.next.consumed))
+
+    def intro_seconds(self):
+        files = self.intro_files()
+        if not files or not self.hubs:
+            return 0
+        hub = next(iter(self.hubs.values()))
+        lens = [len(v) for (p, _, c, b), v in self.intro_cache.items() if p in files and c == hub.codec and b == hub.bitrate]
+        return round(max(lens) / (hub.bitrate * 125), 1) if lens else 0
+
     def start_pushes(self):
         from .relay import Push
         self.pushes = []

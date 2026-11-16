@@ -287,6 +287,19 @@ class Radio:
         mm = re.fullmatch(r"/listen/([a-z0-9\-]+)(\.aac)?\.(m3u|pls)", p)
         if mm:
             return await self.playlist(req, mm.group(1), mm.group(2), mm.group(3))
+        mm = re.fullmatch(r"/jingle-image/([a-z0-9\-]+)", p)
+        if mm:
+            f = os.path.join(self.data_dir, "stations", mm.group(1), "jingle-image")
+            if not os.path.isfile(f):
+                f = os.path.join(self.data_dir, "jingle-image")
+            if not os.path.isfile(f):
+                return await send_file(req.writer, os.path.join(self.web_dir, "jingle-logo.png"),
+                                       {"Access-Control-Allow-Origin": "*", "Cache-Control": "max-age=300"})
+            with open(f, "rb") as fh:
+                data = fh.read()
+            ct = "image/jpeg" if data[:3] == b"\xff\xd8\xff" else ("image/webp" if data[:4] == b"RIFF" else "image/png")
+            return await send(req.writer, 200, data, ct, {"Access-Control-Allow-Origin": "*",
+                                                          "Cache-Control": "max-age=300"})
         mm = re.fullmatch(r"/logo/([a-z0-9\-]+)", p)
         if mm:
             f = os.path.join(self.data_dir, "stations", mm.group(1), "logo")
@@ -695,7 +708,9 @@ class Radio:
                 "title": st.title, "live": st.mode == "live", "on_air": st.mode != "silence",
                 "listeners": st.listener_count(), "logo": f"{base}/logo/{st.slug}",
                 "streams": [{"url": base + h.mount, "codec": h.codec, "bitrate": h.bitrate} for h in st.hubs.values()],
-                "history": rows[1:] if rows and rows[0]["title"] == st.title else rows[:10]}
+                "history": rows[1:] if rows and rows[0]["title"] == st.title else rows[:10],
+                "jingle": st.jingle_playing, "jingle_image": f"{base}/jingle-image/{st.slug}",
+                "intro_secs": st.intro_seconds()}
 
     def period_args(self, req):
         q = req.query
@@ -842,7 +857,7 @@ class Radio:
         if not name:
             raise HTTPError(400, "Numele postului e obligatoriu")
         slug = slugify(d.get("slug") or e.get("slug") or name)
-        if slug in ("api", "static", "admin", "manager", "login", "s", "embed", "listen", "logo", "report",
+        if slug in ("api", "static", "admin", "manager", "login", "s", "embed", "listen", "logo", "report", "jingle-image",
                     "status-json.xsl", "stats"):
             raise HTTPError(400, "Slug rezervat, alege altul")
         other = self.db.one("SELECT id FROM stations WHERE slug=?", (slug,))
@@ -1026,6 +1041,20 @@ class Radio:
                     st.live.kicked = True
                     await st.live.close()
                     self.db.event(sid, "source_kick", "sursa deconectată de admin")
+                return await send_json(w, {"ok": True})
+            if rest == ["jingle-image"] and m in ("POST", "DELETE"):
+                d = os.path.join(self.data_dir, "stations", cfg["slug"])
+                os.makedirs(d, exist_ok=True)
+                f = os.path.join(d, "jingle-image")
+                if m == "DELETE":
+                    if os.path.exists(f):
+                        os.remove(f)
+                else:
+                    body = await req.body(limit=5 * 1024 * 1024)
+                    if body[:4] != b"\x89PNG" and body[:3] != b"\xff\xd8\xff" and body[:4] != b"RIFF":
+                        raise HTTPError(400, "Imaginea trebuie să fie PNG, JPG sau WEBP")
+                    with open(f, "wb") as fh:
+                        fh.write(body)
                 return await send_json(w, {"ok": True})
             if rest == ["logo"] and m == "POST":
                 body = await req.body(limit=3 * 1024 * 1024)
