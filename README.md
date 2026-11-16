@@ -57,6 +57,15 @@ Le găsești în admin → **Posturi** → **Date studio**.
 - Muzica AutoDJ se poate urca și prin SFTP în `/var/lib/nts-radio/stations/<post>/music` (și `jingles`)
 - Jurnal: `journalctl -u nts-radio -f`
 
-## HTTPS pe domeniu
+## HTTPS pe domeniu (nginx + Let's Encrypt)
 
-Vezi `contrib/nginx-nts-radio.conf`. Studioul rămâne conectat direct pe 8000 / 8001.
+Domeniul trebuie să aibă un record A către server, iar porturile 80 și 443 trebuie să fie deschise.
+
+```bash
+cd /opt/nts-radio && sudo git pull && sudo bash https-setup.sh radio.domeniu.ro email@domeniu.ro
+```
+
+- Merge cu nginx din apt sau compilat din sursă (cu rtmp); celelalte site-uri nu sunt atinse.
+- Certificatul se reînnoiește automat, iar adresa publică din NtS-Radio se setează pe `https://`.
+- Studioul rămâne conectat direct pe 8000 / 8001.
+- Configurare manuală: `contrib/nginx-nts-radio.conf`.
