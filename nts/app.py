@@ -174,6 +174,20 @@ class Radio:
             return next(iter(self.stations.values()))
         return None
 
+    PANEL_PATHS = ("/", "/login", "/admin", "/manager")
+
+    def panel_blocked(self, req):
+        """cu HTTPS configurat: panoul / login / API nu se servesc direct pe portul NtS-Radio (doar prin nginx)"""
+        pu = self.db.get_setting("public_url", "") or ""
+        if not pu.lower().startswith("https://"):
+            return False
+        if req.via_proxy or req.peer_ip in ("127.0.0.1", "::1"):
+            return False
+        p = req.path
+        if p.startswith("/api/"):
+            return not p.startswith("/api/public/")
+        return p in self.PANEL_PATHS or p.startswith("/report/")
+
     def is_banned(self, ip):
         r = self.db.one("SELECT until FROM bans WHERE ip=?", (ip,))
         return bool(r) and (not r["until"] or r["until"] > now())
@@ -228,6 +242,11 @@ class Radio:
                 "Access-Control-Allow-Headers": "*"})
         if p in ("/admin/metadata", "/admin/metadata.xsl", "/admin.cgi"):
             return await self.handle_metadata(req)
+        if self.panel_blocked(req):
+            if p.startswith("/api/"):
+                raise HTTPError(403, "Panoul este disponibil doar prin HTTPS")
+            target = self.db.get_setting("public_url", "").rstrip("/") + p + ("?" + req.raw_query if req.raw_query else "")
+            return await send(req.writer, 301, "", headers={"Location": target})
         if p.startswith("/api/"):
             return await self.api(req)
         if m not in ("GET", "HEAD"):

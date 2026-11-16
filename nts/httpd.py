@@ -166,11 +166,16 @@ class Server:
                 if b":" in hl:
                     k, v = hl.decode("latin-1").split(":", 1)
                     headers[k.strip().lower()] = v.strip()
+            peer_ip = ip
+            via_proxy = False
             if ip in self.trusted:
                 fwd = headers.get("x-real-ip") or headers.get("x-forwarded-for", "").split(",")[0].strip()
                 if fwd:
                     ip = fwd
+                    via_proxy = True
             req = Request(reader, writer, method, target, version, headers, ip)
+            req.peer_ip = peer_ip
+            req.via_proxy = via_proxy
             await self.app.dispatch(req)
         except HTTPError as e:
             if req and not req.taken:
