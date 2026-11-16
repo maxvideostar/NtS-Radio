@@ -56,6 +56,8 @@ class DB:
             self.conn.execute("ALTER TABLE stations ADD COLUMN relay TEXT DEFAULT '{}'")
         if "pushes" not in cols:
             self.conn.execute("ALTER TABLE stations ADD COLUMN pushes TEXT DEFAULT '[]'")
+        if "intro" not in cols:
+            self.conn.execute("ALTER TABLE stations ADD COLUMN intro TEXT DEFAULT ''")
         if "source_ips" not in cols:
             self.conn.execute("ALTER TABLE stations ADD COLUMN source_ips TEXT DEFAULT ''")
         bcols = {r[1] for r in self.conn.execute("PRAGMA table_info(bans)")}

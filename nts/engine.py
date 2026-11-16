@@ -97,6 +97,7 @@ class Listener:
         self.sent_title = None
         self.session_id = None
         self.internal = False      # monitorizare din panou (nu intră în statistici)
+        self.intro = None          # jingle trimis la conectare (deja encodat pentru acest mount)
 
     def push(self, data):
         if self.closed:
@@ -140,8 +141,11 @@ class Listener:
         return bytes(out)
 
     async def run(self):
-        for b in list(self.hub.burst):
-            self.push(b)
+        if self.intro:
+            self.push(self.intro)      # jingle de întâmpinare, apoi direct emisia (fără burst)
+        else:
+            for b in list(self.hub.burst):
+                self.push(b)
         while not self.closed:
             await self.event.wait()
             self.event.clear()
@@ -688,6 +692,8 @@ class Station:
         self.peak_today = (time.strftime("%Y-%m-%d"), 0)
         self.alert_task = None
         self.alerted_down = False
+        self.intro_cache = {}          # (cale, mtime, codec, bitrate) -> bytes
+        self.intro_pending = {}
         self.relay = None
         self.relay_title = None
         self.relay_status = {"state": "off"}
@@ -718,7 +724,68 @@ class Station:
         from .relay import relay_loop
         self.relay_task = asyncio.create_task(relay_loop(self))
         self.start_pushes()
+        self.prewarm_intro()
         log(f"pornit, mounturi: {', '.join(self.hubs)}", "info", self.slug)
+
+    # ---------- jingle la conectarea ascultătorului ----------
+    def intro_files(self):
+        v = (self.cfg.get("intro") or "").strip()
+        if not v:
+            return []
+        jd = os.path.join(self.radio.data_dir, "stations", self.slug, "jingles")
+        if v == "*":
+            self.autodj.scan()
+            return list(self.autodj.jingles)[:30]
+        p = os.path.normpath(os.path.join(jd, v))
+        return [p] if p.startswith(jd) and os.path.isfile(p) else []
+
+    async def _encode_intro(self, key):
+        path, _, codec, br = key
+        args = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", path, "-t", "25", "-vn",
+                "-ar", str(SR), "-ac", str(CH)]
+        args += (["-c:a", "libmp3lame", "-b:a", f"{br}k", "-write_xing", "0", "-id3v2_version", "0", "-f", "mp3"]
+                 if codec == "mp3" else ["-c:a", "aac", "-b:a", f"{br}k", "-f", "adts"])
+        args += ["pipe:1"]
+        try:
+            p = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE,
+                                                     stderr=asyncio.subprocess.DEVNULL)
+            out, _ = await asyncio.wait_for(p.communicate(), 60)
+            if out:
+                self.intro_cache[key] = out
+        except Exception as e:
+            log(f"intro {os.path.basename(path)}: {e}", "warn", self.slug)
+        finally:
+            self.intro_pending.pop(key, None)
+
+    def _intro_key(self, path, hub):
+        try:
+            return (path, int(os.path.getmtime(path)), hub.codec, hub.bitrate)
+        except OSError:
+            return None
+
+    def prewarm_intro(self):
+        for path in self.intro_files():
+            for hub in self.hubs.values():
+                k = self._intro_key(path, hub)
+                if k and k not in self.intro_cache and k not in self.intro_pending:
+                    self.intro_pending[k] = asyncio.create_task(self._encode_intro(k))
+
+    async def get_intro(self, hub):
+        files = self.intro_files()
+        if not files:
+            return None
+        path = random.choice(files)
+        k = self._intro_key(path, hub)
+        if not k:
+            return None
+        if k not in self.intro_cache:
+            if k not in self.intro_pending:
+                self.intro_pending[k] = asyncio.create_task(self._encode_intro(k))
+            try:
+                await asyncio.wait_for(asyncio.shield(self.intro_pending[k]), 4)
+            except Exception:
+                return None
+        return self.intro_cache.get(k)
 
     def start_pushes(self):
         from .relay import Push
@@ -732,6 +799,9 @@ class Station:
         """aplică setări fără a deconecta ascultătorii (relay, retransmisii, AutoDJ etc.)"""
         old = self.cfg
         self.cfg = cfg
+        if old.get("intro") != cfg.get("intro"):
+            self.intro_cache.clear()
+            self.prewarm_intro()
         if json.dumps(old.get("pushes"), sort_keys=True) != json.dumps(cfg.get("pushes"), sort_keys=True):
             from .relay import Push
             keep = {}

@@ -319,6 +319,11 @@ class Radio:
         l = Listener(req, st, hub, country)
         if req.query.get("monitor") == "1" and self.current_user(req):
             l.internal = True
+        elif req.method == "GET":
+            try:
+                l.intro = await st.get_intro(hub)
+            except Exception:
+                l.intro = None
         hub.listeners[l.id] = l
         try:
             if not l.internal:
@@ -849,6 +854,10 @@ class Radio:
         if not clean:
             raise HTTPError(400, "Cel puțin o ieșire")
 
+        # ---- jingle la conectare ----
+        intro = str(d.get("intro", e.get("intro", "")) or "").strip()
+        if intro and intro != "*" and (".." in intro or intro.startswith("/")):
+            raise HTTPError(400, "Fișier jingle invalid")
         # ---- IP-uri permise pentru sursă ----
         import ipaddress
         src_ips = ",".join(x.strip() for x in str(d.get("source_ips", e.get("source_ips", "")) or "")
@@ -915,7 +924,8 @@ class Radio:
                 "autodj": 1 if g("autodj", 1) else 0, "shuffle": 1 if g("shuffle", 1) else 0,
                 "crossfade": max(0.0, min(10.0, g("crossfade", 3, float))),
                 "jingle_every": max(0, g("jingle_every", 4)), "silence_secs": max(0, g("silence_secs", 0)),
-                "outputs": clean, "relay": relay, "pushes": pushes, "source_ips": src_ips}
+                "outputs": clean, "relay": relay, "pushes": pushes, "source_ips": src_ips,
+                "intro": intro}
 
     async def api_admin(self, req, seg):
         m, w = req.method, req.writer
@@ -930,12 +940,12 @@ class Radio:
                 d = self.station_payload(await req.json())
                 sid = self.db.exec(
                     "INSERT INTO stations(slug,name,genre,description,website,source_pass,max_listeners,enabled,autodj,"
-                    "shuffle,crossfade,jingle_every,silence_secs,outputs,relay,pushes,source_ips,created) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "shuffle,crossfade,jingle_every,silence_secs,outputs,relay,pushes,source_ips,intro,created) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (d["slug"], d["name"], d["genre"], d["description"], d["website"], d["source_pass"],
                      d["max_listeners"], d["enabled"], d["autodj"], d["shuffle"], d["crossfade"], d["jingle_every"],
                      d["silence_secs"], json.dumps(d["outputs"]), json.dumps(d["relay"]), json.dumps(d["pushes"]),
-                     d["source_ips"], now()))
+                     d["source_ips"], d["intro"], now()))
                 if d["enabled"]:
                     await self.start_station(self.db.station(sid))
                 self.db.event(sid, "config", "post creat")
@@ -959,11 +969,11 @@ class Radio:
                         os.rename(old, new)
                 self.db.exec("UPDATE stations SET slug=?,name=?,genre=?,description=?,website=?,source_pass=?,"
                              "max_listeners=?,enabled=?,autodj=?,shuffle=?,crossfade=?,jingle_every=?,silence_secs=?,"
-                             "outputs=?,relay=?,pushes=?,source_ips=? WHERE id=?",
+                             "outputs=?,relay=?,pushes=?,source_ips=?,intro=? WHERE id=?",
                              (d["slug"], d["name"], d["genre"], d["description"], d["website"], d["source_pass"],
                               d["max_listeners"], d["enabled"], d["autodj"], d["shuffle"], d["crossfade"],
                               d["jingle_every"], d["silence_secs"], json.dumps(d["outputs"]), json.dumps(d["relay"]),
-                              json.dumps(d["pushes"]), d["source_ips"], sid))
+                              json.dumps(d["pushes"]), d["source_ips"], d["intro"], sid))
                 new_cfg = self.db.station(sid)
                 restart = (st is not None) != bool(new_cfg["enabled"]) or (st and (
                     new_cfg["outputs"] != cfg["outputs"] or new_cfg["slug"] != cfg["slug"]))
@@ -1170,6 +1180,7 @@ class Radio:
                     os.remove(tmp)
             if st:
                 st.autodj.scan(force=True)
+                st.prewarm_intro()
             return await send_json(w, {"ok": True, "name": fname})
         if m == "DELETE":
             fp = os.path.normpath(os.path.join(d, name))
@@ -1178,6 +1189,7 @@ class Radio:
             os.remove(fp)
             if st:
                 st.autodj.scan(force=True)
+                st.prewarm_intro()
             return await send_json(w, {"ok": True})
         raise HTTPError(405)
 

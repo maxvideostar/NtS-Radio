@@ -262,6 +262,8 @@ async function editStation(id) {
   if (!STATIONS.length) STATIONS = await api("GET", "/api/admin/stations");
   const s = id ? STATIONS.find(x => x.id === id) : {name: "", slug: "", genre: "", description: "", website: "", source_pass: "", max_listeners: 1000, enabled: 1, autodj: 1, shuffle: 1, crossfade: 3, jingle_every: 4, silence_secs: 0, outputs: [{mount: "", codec: "mp3", bitrate: 128}, {mount: ".aac", codec: "aac", bitrate: 64}], relay: {}, pushes: []};
   const R = s.relay || {};
+  let JINGLES = [];
+  if (id) try { JINGLES = (await api("GET", `/api/admin/stations/${id}/files?type=jingles`)).files.map(f => f.name); } catch (e) {}
   modal(`<h2>${id ? "Editează postul" : "Post nou"}</h2>
    <div class="grid g2">
      <label class="f">Nume post<input id="e-name" value="${esc(s.name)}"></label>
@@ -285,6 +287,11 @@ async function editStation(id) {
      <span></span>
      <label class="f">Crossfade (secunde, 0 = fără)<input id="e-crossfade" type="number" step="0.5" min="0" max="10" value="${s.crossfade}"></label>
      <label class="f">Jingle după fiecare N piese (0 = niciodată)<input id="e-jingle_every" type="number" min="0" value="${s.jingle_every}"></label>
+     <label class="f" style="grid-column:1/-1">Jingle la conectarea ascultătorului (se aude la fiecare ascultător nou, apoi intră emisia)<select id="e-intro">
+        <option value="">Fără</option><option value="*"${s.intro === "*" ? " selected" : ""}>Aleatoriu din jingle-uri</option>
+        ${JINGLES.map(f => `<option value="${esc(f)}"${s.intro === f ? " selected" : ""}>${esc(f)}</option>`).join("")}
+        ${s.intro && s.intro !== "*" && !JINGLES.includes(s.intro) ? `<option value="${esc(s.intro)}" selected>${esc(s.intro)} (lipsă)</option>` : ""}
+      </select></label>
      <label class="f" style="grid-column:1/-1">Detectare liniște pe studio / relay: trece pe sursa următoare după N secunde de liniște (0 = dezactivat)<input id="e-silence_secs" type="number" min="0" value="${s.silence_secs}"></label>
    </div>
    <h3 style="margin-top:16px">Relay de intrare (preia un post extern)</h3>
@@ -315,7 +322,7 @@ async function editStation(id) {
     $("#e-save", m).onclick = async () => {
       const v = k => $("#e-" + k, m).value, c = k => $("#e-" + k, m).checked ? 1 : 0;
       const body = {name: v("name"), slug: v("slug"), genre: v("genre"), website: v("website"), description: v("description"),
-        source_pass: v("source_pass"), source_ips: v("source_ips"), max_listeners: +v("max_listeners"), enabled: c("enabled"), autodj: c("autodj"), shuffle: c("shuffle"),
+        source_pass: v("source_pass"), source_ips: v("source_ips"), intro: v("intro"), max_listeners: +v("max_listeners"), enabled: c("enabled"), autodj: c("autodj"), shuffle: c("shuffle"),
         crossfade: +v("crossfade"), jingle_every: +v("jingle_every"), silence_secs: +v("silence_secs"),
         outputs: $$(".out-row", m).map(r => ({mount: $("[data-k=mount]", r).value.trim(), codec: $("[data-k=codec]", r).value, bitrate: +$("[data-k=bitrate]", r).value})),
         relay: {enabled: $("#e-relay-en", m).checked ? 1 : 0, url: $("#e-relay-url", m).value.trim(),
