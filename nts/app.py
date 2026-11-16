@@ -185,7 +185,7 @@ class Radio:
             return False
         p = req.path
         if p.startswith("/api/"):
-            return not p.startswith("/api/public/")
+            return not (p == "/api/public" or p.startswith("/api/public/"))
         return p in self.PANEL_PATHS or p.startswith("/report/")
 
     def is_banned(self, ip):
