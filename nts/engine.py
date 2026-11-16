@@ -96,6 +96,7 @@ class Listener:
         self.meta_left = self.metaint
         self.sent_title = None
         self.session_id = None
+        self.internal = False      # monitorizare din panou (nu intră în statistici)
 
     def push(self, data):
         if self.closed:
@@ -162,7 +163,7 @@ class Listener:
         return {"id": self.id, "ip": self.ip, "ua": self.ua, "country": self.country, "mount": self.hub.mount,
                 "station_id": self.station.id, "station": self.station.cfg["name"],
                 "since": int(self.started), "duration": int(time.time() - self.started),
-                "device": dev, "os": os_, "player": player, "sent": self.sent}
+                "device": dev, "os": os_, "player": player, "sent": self.sent, "internal": self.internal}
 
 
 class Hub:
@@ -180,6 +181,9 @@ class Hub:
         self.burst_max = self.bitrate * 125 * 3          # ~3 secunde pentru pornire rapidă
         self.max_backlog = self.bitrate * 125 * 30       # 30 s întârziere maximă la client
         self.bytes_out = 0
+
+    def count(self):
+        return sum(1 for l in self.listeners.values() if not l.internal)
 
     @property
     def ctype(self):
@@ -695,7 +699,7 @@ class Station:
         return self.cfg["slug"]
 
     def listener_count(self):
-        return sum(len(h.listeners) for h in self.hubs.values())
+        return sum(h.count() for h in self.hubs.values())
 
     async def start(self):
         self.hubs = {}
@@ -913,7 +917,7 @@ class Station:
     def status(self):
         st = {"id": self.id, "slug": self.slug, "name": self.cfg["name"], "mode": self.mode, "title": self.title,
               "listeners": self.listener_count(), "max_listeners": self.cfg.get("max_listeners"),
-              "mounts": [{"mount": h.mount, "codec": h.codec, "bitrate": h.bitrate, "listeners": len(h.listeners)}
+              "mounts": [{"mount": h.mount, "codec": h.codec, "bitrate": h.bitrate, "listeners": h.count()}
                          for h in self.hubs.values()],
               "live": self.live.info() if self.live else None,
               "autodj": self.autodj.info() if self.cfg.get("autodj", 1) else None,

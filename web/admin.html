@@ -426,7 +426,7 @@ function renderListeners() {
   $("#lis-count").textContent = `(${lisData.length})`;
   $("#lis-list").innerHTML = rows.map(l => `<tr>
     <td>${esc(l.station)}<div class="muted small mono">${esc(l.mount)}</div></td>
-    <td class="mono">${esc(l.ip)}</td>
+    <td class="mono">${esc(l.ip)}${l.internal ? ' <span class="badge relay" title="ascultat din panou – nu intră în statistici">monitor</span>' : ""}</td>
     <td>${flag(l.country)} ${esc(countryName(l.country))}</td>
     <td>${esc(l.device)} · ${esc(l.player)}<div class="muted small" style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(l.ua)}">${esc(l.ua)}</div></td>
     <td class="num">${fmtDur(l.duration)}</td><td class="num">${fmtBytes(l.sent)}</td>

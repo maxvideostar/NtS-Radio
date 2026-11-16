@@ -317,11 +317,14 @@ class Radio:
             return
         country = self.geo.country(req.ip)
         l = Listener(req, st, hub, country)
+        if req.query.get("monitor") == "1" and self.current_user(req):
+            l.internal = True
         hub.listeners[l.id] = l
         try:
-            l.session_id = self.db.exec(
+            if not l.internal:
+                l.session_id = self.db.exec(
                 "INSERT INTO listeners(station_id, mount, ip, ua, country, started) VALUES(?,?,?,?,?,?)",
-                (st.id, hub.mount, l.ip, l.ua[:300], country, int(l.started)))
+                    (st.id, hub.mount, l.ip, l.ua[:300], country, int(l.started)))
         except Exception as e:
             log(f"db listeners: {e}", "error")
         try:
@@ -504,7 +507,7 @@ class Radio:
             for h in st.hubs.values():
                 srcs.append({"listenurl": base + h.mount, "server_name": st.cfg["name"],
                              "server_description": st.cfg.get("description") or "",
-                             "genre": st.cfg.get("genre") or "", "title": st.title, "listeners": len(h.listeners),
+                             "genre": st.cfg.get("genre") or "", "title": st.title, "listeners": h.count(),
                              "listener_peak": st.peak_today[1], "bitrate": h.bitrate,
                              "server_type": h.ctype, "stream_start_iso8601": ""})
         return {"icestats": {"admin": "", "host": req.headers.get("host", ""), "server_id": f"NtS-Radio {VERSION}",
@@ -703,7 +706,7 @@ class Radio:
                    "title": st.title if st else "", "listeners": st.listener_count() if st else 0,
                    "peak_today": st.peak_today[1] if st else 0, "tz": self.tzname()}
             if st:
-                lis = [l.info() for h in st.hubs.values() for l in h.listeners.values()]
+                lis = [l.info() for h in st.hubs.values() for l in h.listeners.values() if not l.internal]
                 cc, dev = {}, {}
                 for l in lis:
                     cc[l["country"] or "?"] = cc.get(l["country"] or "?", 0) + 1
@@ -714,7 +717,7 @@ class Radio:
                 res["live_since"] = int(st.live.connected_at) if st.live else None
                 res["studio_connected"] = bool(st.live)
                 res["mounts"] = [{"url": base + h.mount, "codec": h.codec, "bitrate": h.bitrate,
-                                  "listeners": len(h.listeners)} for h in st.hubs.values()]
+                                  "listeners": h.count(), "path": h.mount} for h in st.hubs.values()]
             t0 = now() - 3 * 3600
             res["recent"] = self.db.all("SELECT ts, listeners FROM snapshots WHERE station_id=? AND ts>=? ORDER BY ts",
                                         (sid, t0))

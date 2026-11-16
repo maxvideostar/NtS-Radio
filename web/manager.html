@@ -7,11 +7,29 @@
 .hero .nowplaying{font-size:20px}
 .songs-mini div{padding:6px 0;border-bottom:1px solid var(--border);display:flex;gap:10px}
 .songs-mini .t{color:var(--text-muted);font-variant-numeric:tabular-nums;min-width:44px}
+.mini{display:flex;align-items:center;gap:10px;background:var(--surface-2);border:1px solid var(--border);border-radius:999px;padding:4px 12px 4px 4px;min-width:0;max-width:400px;flex:0 1 400px}
+.mini .pbtn{width:36px;height:36px;border-radius:50%;border:0;background:var(--accent-2);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;flex:none}
+.mini .pbtn:hover{background:var(--accent)} .mini .pbtn svg{width:16px;height:16px}
+.mini .pt{flex:1;min-width:0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini .pt small{display:block;color:var(--text-muted);font-size:11px}
+.mini select{padding:3px 6px;font-size:12px}
+.mini input[type=range]{width:80px;accent-color:var(--accent)}
+.eq{display:inline-flex;gap:2px;align-items:flex-end;height:12px;margin-right:4px;vertical-align:middle}
+.eq i{width:3px;background:var(--accent);animation:eq 1s infinite ease-in-out}
+.eq i:nth-child(2){animation-delay:.2s}.eq i:nth-child(3){animation-delay:.4s}
+@keyframes eq{0%,100%{height:3px}50%{height:12px}}
+@media(max-width:900px){.mini{order:3;flex-basis:100%;max-width:none}.mini input[type=range]{display:none}}
 .days label{display:inline-flex;gap:4px;align-items:center;margin-right:10px;color:var(--text-secondary)}
 </style></head>
 <body>
 <div class="topbar">
   <div class="brand"><img id="st-logo" src="/static/logo.svg" alt="" style="border-radius:6px;object-fit:cover"><span id="st-name">Statistici</span></div>
+  <div class="mini" id="mini">
+    <button class="pbtn" id="p-btn" title="Ascultă postul"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
+    <div class="pt"><span id="p-title">—</span><small id="p-state">Apasă play ca să asculți postul</small></div>
+    <select id="p-stream" title="Stream"></select>
+    <input type="range" id="p-vol" min="0" max="1" step="0.01" value="0.9" title="Volum">
+  </div>
   <nav class="tabs" id="tabs">
     <button data-t="live" class="active">Acum</button>
     <button data-t="stats">Statistici</button>
@@ -102,8 +120,49 @@
 </main>
 <div class="footer">NtS-Radio · IP Geolocation by <a href="https://db-ip.com" target="_blank">DB-IP</a></div>
 
+<audio id="p-audio" preload="none"></audio>
 <script src="/static/common.js"></script>
 <script>
+/* ---------- player (monitorizare – nu intră în statistici) ---------- */
+const PL = {playing: false, slug: null, mounts: []};
+const P_PLAY = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
+const P_STOP = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+const pAudio = $("#p-audio");
+function pSrc() { return $("#p-stream").value + "?monitor=1&t=" + Date.now(); }
+function pStop() { pAudio.pause(); pAudio.removeAttribute("src"); pAudio.load(); PL.playing = false; $("#p-btn").innerHTML = P_PLAY; $("#p-state").textContent = "Oprit"; }
+function pStart() {
+  if (!$("#p-stream").value) return;
+  pAudio.src = pSrc();
+  $("#p-state").textContent = "Se conectează...";
+  pAudio.play().then(() => { PL.playing = true; $("#p-btn").innerHTML = P_STOP; $("#p-state").innerHTML = '<span class="eq"><i></i><i></i><i></i></span>Se aude acum'; })
+    .catch(() => { $("#p-state").textContent = "Nu s-a putut porni"; $("#p-btn").innerHTML = P_PLAY; });
+}
+$("#p-btn").onclick = () => PL.playing ? pStop() : pStart();
+$("#p-stream").onchange = () => { try { localStorage.setItem("mgr-stream", $("#p-stream").value); } catch (e) {} if (PL.playing) pStart(); };
+$("#p-vol").oninput = e => { pAudio.volume = e.target.value; try { localStorage.setItem("mgr-vol", e.target.value); } catch (er) {} };
+try { const v = localStorage.getItem("mgr-vol"); if (v) { $("#p-vol").value = v; pAudio.volume = v; } } catch (e) {}
+pAudio.onerror = () => { if (PL.playing) { $("#p-state").textContent = "Reconectare..."; setTimeout(() => PL.playing && pStart(), 2000); } };
+async function pRefresh() {
+  if (!SID) return;
+  try {
+    const d = await api("GET", `/api/station/${SID}/live`);
+    pUpdate(d);
+  } catch (e) {}
+}
+function pUpdate(d) {
+  $("#p-title").textContent = d.title || d.name;
+  const sel = $("#p-stream");
+  const key = (d.mounts || []).map(m => m.path).join(",");
+  if (sel.dataset.key !== key) {
+    sel.dataset.key = key;
+    let saved = null; try { saved = localStorage.getItem("mgr-stream"); } catch (e) {}
+    sel.innerHTML = (d.mounts || []).map(m => `<option value="${esc(m.path)}">${m.codec.toUpperCase()} ${m.bitrate}k</option>`).join("");
+    if (saved && [...sel.options].some(o => o.value === saved)) sel.value = saved;
+  }
+  if ("mediaSession" in navigator && PL.playing) navigator.mediaSession.metadata = new MediaMetadata({title: d.title || d.name, artist: d.name});
+}
+setInterval(() => { if (cur !== "live") pRefresh(); }, 15000);
+
 let SID = null, cur = "live", timer = null, P = {key: "today"}, stationsList = [];
 
 /* ---------- perioadă ---------- */
@@ -170,6 +229,7 @@ async function loadLive() {
   let d;
   try { d = await api("GET", `/api/station/${SID}/live`); } catch (e) { return; }
   setTZ(d.tz);
+  pUpdate(d);
   const tlh = (d.today && d.today.secs || 0) / 3600;
   $("#live-tiles").innerHTML =
     tile("Ascultători acum", fmtN(d.listeners), d.listeners ? `timp mediu conectat: ${fmtDur(d.avg_time)}` : "") +
@@ -289,9 +349,10 @@ async function loadLinks() {
     sel.classList.remove("hidden");
     sel.innerHTML = stationsList.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
     sel.value = SID;
-    sel.onchange = () => { SID = +sel.value; location.hash = SID; setHeader(); render(); };
+    sel.onchange = () => { SID = +sel.value; location.hash = SID; setHeader(); if (PL.playing) pStop(); $("#p-stream").dataset.key = ""; pRefresh(); render(); };
   }
   setHeader();
+  pRefresh();
   setPeriod(calcPeriod("today"));
   show("live");
 })();
