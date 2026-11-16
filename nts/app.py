@@ -36,6 +36,7 @@ class Radio:
         self.stations = {}          # id -> Station
         self.started = time.time()
         self.login_fail = {}
+        self.src_fails = {}
         self.cpu_prev = None
 
     # ------------------------------------------------------------------ pornire
@@ -174,7 +175,47 @@ class Radio:
         return None
 
     def is_banned(self, ip):
-        return bool(self.db.one("SELECT ip FROM bans WHERE ip=?", (ip,)))
+        r = self.db.one("SELECT until FROM bans WHERE ip=?", (ip,))
+        return bool(r) and (not r["until"] or r["until"] > now())
+
+    # ---- protecție surse: blocare automată după încercări eșuate ----
+    SRC_MAX_FAILS = 5          # încercări greșite
+    SRC_WINDOW = 600           # în 10 minute
+    SRC_BLOCK = 86400          # -> blocat 24 h
+
+    def source_fail(self, ip, what):
+        lst = [t for t in self.src_fails.get(ip, []) if time.time() - t < self.SRC_WINDOW]
+        lst.append(time.time())
+        self.src_fails[ip] = lst
+        if len(lst) >= self.SRC_MAX_FAILS:
+            self.src_fails.pop(ip, None)
+            if ip in ("127.0.0.1", "::1"):
+                return
+            self.db.exec("INSERT OR REPLACE INTO bans(ip, reason, created, until) VALUES(?,?,?,?)",
+                         (ip, f"auto: {self.SRC_MAX_FAILS} încercări greșite ({what})", now(), now() + self.SRC_BLOCK))
+            self.db.event(None, "auto_ban", f"{ip} blocat 24h – {what}")
+            log(f"IP {ip} blocat automat 24h după {self.SRC_MAX_FAILS} încercări greșite ({what})", "warn")
+        elif len(lst) == 1:
+            log(f"{what} respinsă de la {ip}", "warn")
+
+    @staticmethod
+    def ip_allowed(ip, allow):
+        allow = (allow or "").replace(";", ",").replace(" ", ",")
+        nets = [a.strip() for a in allow.split(",") if a.strip()]
+        if not nets:
+            return True
+        import ipaddress
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        for n in nets:
+            try:
+                if a in ipaddress.ip_network(n, strict=False):
+                    return True
+            except ValueError:
+                continue
+        return False
 
     # ------------------------------------------------------------------ dispatch
     async def dispatch(self, req):
@@ -324,6 +365,8 @@ class Radio:
 
     # ------------------------------------------------------------------ surse (studio)
     async def handle_icecast_source(self, req):
+        if self.is_banned(req.ip):
+            raise HTTPError(403, "Acces interzis")
         st = self.station_for_source_path(req.path)
         auth = req.headers.get("authorization", "")
         pw = ""
@@ -336,8 +379,11 @@ class Radio:
         if st is None and by_pw is not None:
             st = by_pw
         if st is None or by_pw is not st:
-            log(f"sursă respinsă de la {req.ip} pe {req.path} (parolă greșită sau mount necunoscut)", "warn")
+            self.source_fail(req.ip, f"sursă Icecast pe {req.path[:40]} (parolă greșită)")
             raise HTTPError(401, "Autentificare eșuată")
+        if not self.ip_allowed(req.ip, st.cfg.get("source_ips")):
+            self.source_fail(req.ip, f"sursă Icecast pentru {st.slug} (IP nepermis)")
+            raise HTTPError(403, "IP nepermis pentru sursă")
         live = LiveInput(st, req.ip, req.headers.get("user-agent"), req.headers.get("content-type"),
                          "Icecast", req.headers)
         ok, msg = await st.attach_live(live)
@@ -357,12 +403,24 @@ class Radio:
         """SHOUTcast v1: encoderul se conectează pe port+1, trimite parola, apoi headere icy-* și audio"""
         peer = writer.get_extra_info("peername")
         ip = peer[0] if peer else "?"
+        if ip.startswith("::ffff:"):
+            ip = ip[7:]
         try:
+            if self.is_banned(ip):
+                return
             line = await asyncio.wait_for(reader.readline(), 10)
             pw = line.decode("utf-8", "replace").strip()
+            if re.match(r"^(GET|POST|HEAD|OPTIONS|PUT|CONNECT|PRI) ", pw) or not pw.isprintable() or len(pw) > 200:
+                self.source_fail(ip, "scanare pe portul SHOUTcast")
+                return
             st = self.station_by_source_pass(pw)
             if not st:
-                log(f"sursă SHOUTcast respinsă de la {ip} (parolă greșită)", "warn")
+                self.source_fail(ip, "sursă SHOUTcast (parolă greșită)")
+                writer.write(b"invalid password\r\n")
+                await writer.drain()
+                return
+            if not self.ip_allowed(ip, st.cfg.get("source_ips")):
+                self.source_fail(ip, f"sursă SHOUTcast pentru {st.slug} (IP nepermis)")
                 writer.write(b"invalid password\r\n")
                 await writer.drain()
                 return
@@ -408,6 +466,8 @@ class Radio:
             await st.detach_live(live)
 
     async def handle_metadata(self, req):
+        if self.is_banned(req.ip):
+            raise HTTPError(403, "Acces interzis")
         q = req.query
         pw = q.get("pass", "")
         auth = req.headers.get("authorization", "")
@@ -423,6 +483,7 @@ class Radio:
             if st2 is not None and st2 is not st:
                 st = None
         if not st:
+            self.source_fail(req.ip, "actualizare metadate (parolă greșită)")
             raise HTTPError(401, "Autentificare eșuată")
         raw = urllib.parse.parse_qs(req.raw_query, keep_blank_values=True,
                                     encoding="latin-1").get("song", [""])[-1]
@@ -785,6 +846,15 @@ class Radio:
         if not clean:
             raise HTTPError(400, "Cel puțin o ieșire")
 
+        # ---- IP-uri permise pentru sursă ----
+        import ipaddress
+        src_ips = ",".join(x.strip() for x in str(d.get("source_ips", e.get("source_ips", "")) or "")
+                           .replace(";", ",").replace(" ", ",").split(",") if x.strip())
+        for n in filter(None, src_ips.split(",")):
+            try:
+                ipaddress.ip_network(n, strict=False)
+            except ValueError:
+                raise HTTPError(400, f"IP / rețea invalidă: {n}")
         # ---- relay de intrare ----
         rin = d.get("relay", e.get("relay")) or {}
         rurl = (rin.get("url") or "").strip()
@@ -842,7 +912,7 @@ class Radio:
                 "autodj": 1 if g("autodj", 1) else 0, "shuffle": 1 if g("shuffle", 1) else 0,
                 "crossfade": max(0.0, min(10.0, g("crossfade", 3, float))),
                 "jingle_every": max(0, g("jingle_every", 4)), "silence_secs": max(0, g("silence_secs", 0)),
-                "outputs": clean, "relay": relay, "pushes": pushes}
+                "outputs": clean, "relay": relay, "pushes": pushes, "source_ips": src_ips}
 
     async def api_admin(self, req, seg):
         m, w = req.method, req.writer
@@ -857,12 +927,12 @@ class Radio:
                 d = self.station_payload(await req.json())
                 sid = self.db.exec(
                     "INSERT INTO stations(slug,name,genre,description,website,source_pass,max_listeners,enabled,autodj,"
-                    "shuffle,crossfade,jingle_every,silence_secs,outputs,relay,pushes,created) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "shuffle,crossfade,jingle_every,silence_secs,outputs,relay,pushes,source_ips,created) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (d["slug"], d["name"], d["genre"], d["description"], d["website"], d["source_pass"],
                      d["max_listeners"], d["enabled"], d["autodj"], d["shuffle"], d["crossfade"], d["jingle_every"],
                      d["silence_secs"], json.dumps(d["outputs"]), json.dumps(d["relay"]), json.dumps(d["pushes"]),
-                     now()))
+                     d["source_ips"], now()))
                 if d["enabled"]:
                     await self.start_station(self.db.station(sid))
                 self.db.event(sid, "config", "post creat")
@@ -886,11 +956,11 @@ class Radio:
                         os.rename(old, new)
                 self.db.exec("UPDATE stations SET slug=?,name=?,genre=?,description=?,website=?,source_pass=?,"
                              "max_listeners=?,enabled=?,autodj=?,shuffle=?,crossfade=?,jingle_every=?,silence_secs=?,"
-                             "outputs=?,relay=?,pushes=? WHERE id=?",
+                             "outputs=?,relay=?,pushes=?,source_ips=? WHERE id=?",
                              (d["slug"], d["name"], d["genre"], d["description"], d["website"], d["source_pass"],
                               d["max_listeners"], d["enabled"], d["autodj"], d["shuffle"], d["crossfade"],
                               d["jingle_every"], d["silence_secs"], json.dumps(d["outputs"]), json.dumps(d["relay"]),
-                              json.dumps(d["pushes"]), sid))
+                              json.dumps(d["pushes"]), d["source_ips"], sid))
                 new_cfg = self.db.station(sid)
                 restart = (st is not None) != bool(new_cfg["enabled"]) or (st and (
                     new_cfg["outputs"] != cfg["outputs"] or new_cfg["slug"] != cfg["slug"]))
@@ -958,6 +1028,7 @@ class Radio:
             raise HTTPError(404, "Ascultătorul nu mai e conectat")
         if seg == ["bans"]:
             if m == "GET":
+                self.db.exec("DELETE FROM bans WHERE until > 0 AND until < ?", (now(),))
                 return await send_json(w, self.db.all("SELECT * FROM bans ORDER BY created DESC"))
             d = await req.json()
             ip = (d.get("ip") or "").strip()

@@ -63,7 +63,8 @@
     </div>
     <div class="card" style="margin-top:14px"><div class="card-head"><h3>IP-uri blocate</h3>
       <div class="row"><input id="ban-ip" placeholder="IP"><input id="ban-reason" placeholder="Motiv (opțional)"><button class="btn" id="ban-add">Blochează</button></div></div>
-      <table><thead><tr><th>IP</th><th>Motiv</th><th>Data</th><th></th></tr></thead><tbody id="ban-list"></tbody></table>
+      <p class="muted small">IP-urile care greșesc de 5 ori parola sursei în 10 minute (scanere, roboți) sunt blocate automat 24 de ore.</p>
+      <table><thead><tr><th>IP</th><th>Motiv</th><th>Data</th><th>Expiră</th><th></th></tr></thead><tbody id="ban-list"></tbody></table>
     </div>
   </section>
 
@@ -270,6 +271,7 @@ async function editStation(id) {
      <label class="f" style="grid-column:1/-1">Descriere<input id="e-description" value="${esc(s.description)}"></label>
      <label class="f">Parola sursei (pentru studio)<div class="row" style="flex-wrap:nowrap"><input id="e-source_pass" value="${esc(s.source_pass)}" placeholder="generată automat" style="flex:1"><button class="btn sm" type="button" id="e-gen">Generează</button></div></label>
      <label class="f">Număr maxim ascultători (0 = nelimitat)<input id="e-max_listeners" type="number" min="0" value="${s.max_listeners}"></label>
+     <label class="f" style="grid-column:1/-1">IP-uri permise pentru studio (opțional – gol = orice IP; ex: 86.120.1.2, 89.33.0.0/16)<input id="e-source_ips" value="${esc(s.source_ips || "")}" placeholder="toate IP-urile"></label>
    </div>
    <h3 style="margin-top:16px">Ieșiri (stream-uri pentru ascultători)</h3>
    <p class="muted small">Toate ieșirile primesc același sunet. Sufixul se adaugă la mount: gol → /slug, „.aac” → /slug.aac, „-hq” → /slug-hq.</p>
@@ -313,7 +315,7 @@ async function editStation(id) {
     $("#e-save", m).onclick = async () => {
       const v = k => $("#e-" + k, m).value, c = k => $("#e-" + k, m).checked ? 1 : 0;
       const body = {name: v("name"), slug: v("slug"), genre: v("genre"), website: v("website"), description: v("description"),
-        source_pass: v("source_pass"), max_listeners: +v("max_listeners"), enabled: c("enabled"), autodj: c("autodj"), shuffle: c("shuffle"),
+        source_pass: v("source_pass"), source_ips: v("source_ips"), max_listeners: +v("max_listeners"), enabled: c("enabled"), autodj: c("autodj"), shuffle: c("shuffle"),
         crossfade: +v("crossfade"), jingle_every: +v("jingle_every"), silence_secs: +v("silence_secs"),
         outputs: $$(".out-row", m).map(r => ({mount: $("[data-k=mount]", r).value.trim(), codec: $("[data-k=codec]", r).value, bitrate: +$("[data-k=bitrate]", r).value})),
         relay: {enabled: $("#e-relay-en", m).checked ? 1 : 0, url: $("#e-relay-url", m).value.trim(),
@@ -434,7 +436,7 @@ async function kick(id) { try { await api("POST", `/api/admin/listeners/${id}/ki
 async function ban(id) { if (await confirmBox("Blochezi IP-ul acestui ascultător?")) try { await api("POST", `/api/admin/listeners/${id}/ban`); loadListeners(); loadBans(); } catch (e) { fail(e); } }
 async function loadBans() {
   const b = await api("GET", "/api/admin/bans");
-  $("#ban-list").innerHTML = b.map(x => `<tr><td class="mono">${esc(x.ip)}</td><td>${esc(x.reason)}</td><td>${fmtDT(x.created)}</td><td class="right"><button class="btn sm" onclick="unban('${esc(x.ip)}')">Deblochează</button></td></tr>`).join("") || `<tr><td colspan="4" class="muted">Niciun IP blocat.</td></tr>`;
+  $("#ban-list").innerHTML = b.map(x => `<tr><td class="mono">${esc(x.ip)}</td><td>${esc(x.reason)}</td><td>${fmtDT(x.created)}</td><td>${x.until ? fmtDT(x.until) : '<span class="muted">permanent</span>'}</td><td class="right"><button class="btn sm" onclick="unban('${esc(x.ip)}')">Deblochează</button></td></tr>`).join("") || `<tr><td colspan="5" class="muted">Niciun IP blocat.</td></tr>`;
 }
 $("#ban-add").onclick = async () => { try { await api("POST", "/api/admin/bans", {ip: $("#ban-ip").value, reason: $("#ban-reason").value}); $("#ban-ip").value = ""; loadBans(); } catch (e) { fail(e); } };
 async function unban(ip) { try { await api("DELETE", "/api/admin/bans", {ip}); loadBans(); } catch (e) { fail(e); } }
@@ -481,7 +483,7 @@ $("#addUser").onclick = async () => {
 
 /* ================= EVENIMENTE ================= */
 const EVN = {source_connect: "🟢 Studio conectat", source_disconnect: "🔴 Studio deconectat", source_kick: "⛔ Studio deconectat de admin", silence: "⚠ Liniște pe emisie", config: "⚙ Configurare",
-  relay_up: "🔵 Relay conectat", relay_down: "🔴 Relay întrerupt", push_up: "📡 Retransmisie conectată", push_down: "🔴 Retransmisie întreruptă"};
+  relay_up: "🔵 Relay conectat", relay_down: "🔴 Relay întrerupt", push_up: "📡 Retransmisie conectată", push_down: "🔴 Retransmisie întreruptă", auto_ban: "🛡 IP blocat automat"};
 async function loadEvents() {
   const d = await api("GET", "/api/admin/events");
   $("#ev-list").innerHTML = d.events.map(e => `<tr><td class="nowrap">${fmtDT(e.ts)}</td><td>${esc(e.station || "")}</td><td class="nowrap">${EVN[e.type] || esc(e.type)}</td><td class="small">${esc(e.detail)}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">Niciun eveniment.</td></tr>`;

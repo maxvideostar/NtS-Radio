@@ -56,6 +56,11 @@ class DB:
             self.conn.execute("ALTER TABLE stations ADD COLUMN relay TEXT DEFAULT '{}'")
         if "pushes" not in cols:
             self.conn.execute("ALTER TABLE stations ADD COLUMN pushes TEXT DEFAULT '[]'")
+        if "source_ips" not in cols:
+            self.conn.execute("ALTER TABLE stations ADD COLUMN source_ips TEXT DEFAULT ''")
+        bcols = {r[1] for r in self.conn.execute("PRAGMA table_info(bans)")}
+        if "until" not in bcols:
+            self.conn.execute("ALTER TABLE bans ADD COLUMN until INTEGER DEFAULT 0")
 
     def exec(self, sql, args=()):
         with self.lock:
