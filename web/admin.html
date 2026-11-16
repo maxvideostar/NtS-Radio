@@ -263,7 +263,11 @@ async function editStation(id) {
   const s = id ? STATIONS.find(x => x.id === id) : {name: "", slug: "", genre: "", description: "", website: "", source_pass: "", max_listeners: 1000, enabled: 1, autodj: 1, shuffle: 1, crossfade: 3, jingle_every: 4, silence_secs: 0, outputs: [{mount: "", codec: "mp3", bitrate: 128}, {mount: ".aac", codec: "aac", bitrate: 64}], relay: {}, pushes: []};
   const R = s.relay || {};
   let JINGLES = [];
-  if (id) try { JINGLES = (await api("GET", `/api/admin/stations/${id}/files?type=jingles`)).files.map(f => f.name); } catch (e) {}
+  try { JINGLES = await api("GET", "/api/admin/jingles-all"); } catch (e) {}
+  const ownSlug = s.slug;
+  const introVal = s.intro && s.intro !== "*" && !s.intro.includes("/") ? `${ownSlug}/${s.intro}` : (s.intro || "");
+  const groups = {};
+  JINGLES.forEach(j => (groups[j.station] = groups[j.station] || []).push(j));
   modal(`<h2>${id ? "Editează postul" : "Post nou"}</h2>
    <div class="grid g2">
      <label class="f">Nume post<input id="e-name" value="${esc(s.name)}"></label>
@@ -288,10 +292,10 @@ async function editStation(id) {
      <label class="f">Crossfade (secunde, 0 = fără)<input id="e-crossfade" type="number" step="0.5" min="0" max="10" value="${s.crossfade}"></label>
      <label class="f">Jingle după fiecare N piese (0 = niciodată)<input id="e-jingle_every" type="number" min="0" value="${s.jingle_every}"></label>
      <label class="f" style="grid-column:1/-1">Jingle la conectarea ascultătorului (se aude la fiecare ascultător nou, apoi intră emisia)<select id="e-intro">
-        <option value="">Fără</option><option value="*"${s.intro === "*" ? " selected" : ""}>Aleatoriu din jingle-uri</option>
-        ${JINGLES.map(f => `<option value="${esc(f)}"${s.intro === f ? " selected" : ""}>${esc(f)}</option>`).join("")}
-        ${s.intro && s.intro !== "*" && !JINGLES.includes(s.intro) ? `<option value="${esc(s.intro)}" selected>${esc(s.intro)} (lipsă)</option>` : ""}
-      </select></label>
+        <option value="">Fără</option><option value="*"${s.intro === "*" ? " selected" : ""}>Aleatoriu din jingle-urile acestui post</option>
+        ${Object.entries(groups).map(([st, list]) => `<optgroup label="Jingle-uri ${esc(st)}">${list.map(j => `<option value="${esc(j.value)}"${introVal === j.value ? " selected" : ""}>${esc(j.name)}</option>`).join("")}</optgroup>`).join("")}
+        ${introVal && introVal !== "*" && !JINGLES.some(j => j.value === introVal) ? `<option value="${esc(introVal)}" selected>${esc(introVal)} (lipsă)</option>` : ""}
+      </select><span class="muted small">Poți folosi orice jingle, din folderul oricărui post.</span></label>
      <label class="f" style="grid-column:1/-1">Detectare liniște pe studio / relay: trece pe sursa următoare după N secunde de liniște (0 = dezactivat)<input id="e-silence_secs" type="number" min="0" value="${s.silence_secs}"></label>
    </div>
    <h3 style="margin-top:16px">Relay de intrare (preia un post extern)</h3>

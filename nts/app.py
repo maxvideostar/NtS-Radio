@@ -1017,6 +1017,17 @@ class Radio:
                 return await send_json(w, {"ok": True})
             if rest == ["files"]:
                 return await self.api_files(req, cfg, st)
+        if seg == ["jingles-all"]:
+            res = []
+            for cfg in self.db.stations():
+                jd = os.path.join(self.data_dir, "stations", cfg["slug"], "jingles")
+                for root, _, files in os.walk(jd):
+                    for f in sorted(files):
+                        if os.path.splitext(f)[1].lower() in {".mp3", ".aac", ".m4a", ".ogg", ".opus", ".flac", ".wav"}:
+                            rel = os.path.relpath(os.path.join(root, f), jd)
+                            res.append({"station_id": cfg["id"], "station": cfg["name"], "slug": cfg["slug"],
+                                        "name": rel, "value": f"{cfg['slug']}/{rel}"})
+            return await send_json(w, res)
         if seg == ["listeners"]:
             res = []
             for st in self.stations.values():

@@ -732,12 +732,17 @@ class Station:
         v = (self.cfg.get("intro") or "").strip()
         if not v:
             return []
-        jd = os.path.join(self.radio.data_dir, "stations", self.slug, "jingles")
+        base = os.path.join(self.radio.data_dir, "stations")
         if v == "*":
             self.autodj.scan()
             return list(self.autodj.jingles)[:30]
-        p = os.path.normpath(os.path.join(jd, v))
-        return [p] if p.startswith(jd) and os.path.isfile(p) else []
+        if "/" in v:      # jingle din folderul altui post: "<slug>/<fișier>"
+            slug, name = v.split("/", 1)
+            jd = os.path.join(base, slug, "jingles")
+        else:
+            jd, name = os.path.join(base, self.slug, "jingles"), v
+        p = os.path.normpath(os.path.join(jd, name))
+        return [p] if p.startswith(os.path.normpath(jd) + os.sep) and os.path.isfile(p) else []
 
     async def _encode_intro(self, key):
         path, _, codec, br = key
