@@ -634,6 +634,11 @@ class Radio:
                 raise HTTPError(404)
 
         # ---------- public ----------
+        if seg == ["public"]:
+            lst = [self.public_info(req, st) for st in sorted(self.stations.values(), key=lambda x: x.id)]
+            for x in lst:
+                x.pop("history", None)
+            return await send_json(w, lst, headers={"Access-Control-Allow-Origin": "*"})
         if seg[:1] == ["public"] and len(seg) == 2:
             st = self.station_by_slug(seg[1])
             if not st:

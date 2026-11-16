@@ -84,7 +84,9 @@ def classify_ua(ua):
         os_ = "Linux"
     else:
         os_ = "Altele"
-    if "vlc" in u or "libvlc" in u:
+    if "netstreamingradio" in u:
+        player = "Aplicația NetStreaming"
+    elif "vlc" in u or "libvlc" in u:
         player = "VLC"
     elif "winamp" in u:
         player = "Winamp"
