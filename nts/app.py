@@ -303,8 +303,9 @@ class Radio:
         mm = re.fullmatch(r"/logo/([a-z0-9\-]+)", p)
         if mm:
             f = os.path.join(self.data_dir, "stations", mm.group(1), "logo")
-            if not os.path.isfile(f):
-                return await send_file(req.writer, os.path.join(self.web_dir, "logo.svg"))
+            if not os.path.isfile(f):      # implicit: PNG (merge și în aplicația Android / Android Auto)
+                return await send_file(req.writer, os.path.join(self.web_dir, "jingle-logo.png"),
+                                       {"Access-Control-Allow-Origin": "*", "Cache-Control": "max-age=300"})
             with open(f, "rb") as fh:
                 data = fh.read()
             ct = "image/png"

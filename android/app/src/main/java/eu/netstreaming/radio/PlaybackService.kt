@@ -9,6 +9,7 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Metadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -17,6 +18,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.extractor.metadata.icy.IcyInfo
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
@@ -86,6 +88,17 @@ class PlaybackService : MediaLibraryService() {
                 if (isPlaying) retries = 0
             }
 
+            override fun onMetadata(metadata: Metadata) {
+                // titlul piesei din stream (ICY) -> notificare, ecran blocat, Android Auto, aplicație
+                for (i in 0 until metadata.length()) {
+                    val e = metadata.get(i)
+                    if (e is IcyInfo) {
+                        val song = e.title?.trim().orEmpty()
+                        updateNowPlaying(song)
+                    }
+                }
+            }
+
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 mediaItem?.mediaId?.let { Stations.prefs(this@PlaybackService).edit().putString("last", it).apply() }
             }
@@ -100,6 +113,23 @@ class PlaybackService : MediaLibraryService() {
             .build()
 
         io.execute { runCatching { Stations.fetch(this) } }
+    }
+
+    private fun updateNowPlaying(song: String) {
+        val idx = player.currentMediaItemIndex
+        val cur = player.currentMediaItem ?: return
+        val st = Stations.find(cur.mediaId)
+        val stationName = st?.name ?: cur.mediaMetadata.station?.toString() ?: cur.mediaMetadata.title?.toString() ?: ""
+        val title = if (song.isNotBlank() && song != stationName) song else stationName
+        if (cur.mediaMetadata.title?.toString() == title) return
+        val md = cur.mediaMetadata.buildUpon()
+            .setTitle(title)
+            .setDisplayTitle(title)
+            .setArtist(stationName)
+            .setSubtitle(stationName)
+            .setStation(stationName)
+            .build()
+        player.replaceMediaItem(idx, cur.buildUpon().setMediaMetadata(md).build())
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
