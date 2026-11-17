@@ -1071,6 +1071,8 @@ class Radio:
                 return await send_json(w, {"ok": True})
             if rest == ["files"]:
                 return await self.api_files(req, cfg, st)
+            if rest and rest[0] in ("autodj", "queue", "play-now", "playlists", "schedule"):
+                return await self.api_autodj(req, sid, cfg, st, rest)
         if seg == ["jingles-all"]:
             res = []
             for cfg in self.db.stations():
@@ -1200,6 +1202,150 @@ class Radio:
             self.alert("✅ NtS-Radio: test alertă Telegram reușit.")
             return await send_json(w, {"ok": True})
         raise HTTPError(404, "Endpoint inexistent")
+
+    # ------------------------------------------------------------------ AutoDJ: coadă, playlist-uri, programare
+    def _music_rel(self, cfg, rel):
+        md = os.path.join(self.data_dir, "stations", cfg["slug"], "music")
+        p = os.path.normpath(os.path.join(md, rel or ""))
+        if not p.startswith(os.path.normpath(md) + os.sep) or not os.path.isfile(p):
+            raise HTTPError(400, f"Fișier inexistent: {rel}")
+        return os.path.relpath(p, md)
+
+    def _playlists(self, sid):
+        return self.db.all("SELECT p.id, p.name, p.shuffle, (SELECT COUNT(*) FROM playlist_items i "
+                           "WHERE i.playlist_id=p.id) AS count FROM playlists p WHERE p.station_id=? "
+                           "ORDER BY p.name COLLATE NOCASE", (sid,))
+
+    async def api_autodj(self, req, sid, cfg, st, rest):
+        m, w = req.method, req.writer
+        adj = st.autodj if st else None
+        what = rest[0]
+        if what == "autodj" and m == "GET":
+            q = [adj.rel_path(p) for p in adj.manual] if adj else []
+            sched = self.db.all("SELECT id, playlist_id, days, start, end FROM schedule WHERE station_id=? "
+                                "ORDER BY pos, id", (sid,))
+            active = adj.active_playlist() if adj else (None, None)
+            return await send_json(w, {
+                "running": bool(st), "mode": st.mode if st else "off",
+                "current": adj.cur.title if adj and adj.cur else None,
+                "current_pos": round(adj.cur.consumed / 176400) if adj and adj.cur else 0,
+                "current_dur": round(adj.cur.duration) if adj and adj.cur else 0,
+                "next": adj.next.title if adj and adj.next else None,
+                "queue": q, "playlists": self._playlists(sid), "schedule": sched,
+                "default_playlist": int(cfg.get("default_playlist") or 0),
+                "active_playlist": {"id": active[0], "name": active[1]} if active[0] else None})
+        if what == "queue":
+            if not adj:
+                raise HTTPError(409, "Postul este oprit")
+            d = await req.json()
+            if m == "POST":          # adaugă: {path, where: "next"|"end"}
+                p = adj.abs_path(self._music_rel(cfg, d.get("path")))
+                if d.get("where") == "next":
+                    adj.manual.insert(0, p)
+                else:
+                    adj.manual.append(p)
+                adj._save_manual()
+            elif m == "PUT":         # reordonare completă: {queue: [rel,...]}
+                adj.queue_set([self._music_rel(cfg, r) for r in d.get("queue", [])])
+            elif m == "DELETE":      # {index} sau {all: true}
+                if d.get("all"):
+                    adj.manual = []
+                else:
+                    i = int(d.get("index", -1))
+                    if 0 <= i < len(adj.manual):
+                        adj.manual.pop(i)
+                adj._save_manual()
+            asyncio.create_task(adj.refresh_next())
+            return await send_json(w, {"ok": True, "queue": [adj.rel_path(p) for p in adj.manual]})
+        if what == "play-now" and m == "POST":
+            if not adj:
+                raise HTTPError(409, "Postul este oprit")
+            d = await req.json()
+            ok = await adj.play_now(self._music_rel(cfg, d.get("path")))
+            return await send_json(w, {"ok": ok})
+        if what == "playlists":
+            if len(rest) == 1:
+                if m == "GET":
+                    return await send_json(w, self._playlists(sid))
+                if m == "POST":
+                    d = await req.json()
+                    name = (d.get("name") or "").strip()[:80]
+                    if not name:
+                        raise HTTPError(400, "Numele playlistului e obligatoriu")
+                    pid = self.db.exec("INSERT INTO playlists(station_id, name, shuffle, created) VALUES(?,?,?,?)",
+                                       (sid, name, 1 if d.get("shuffle") else 0, now()))
+                    return await send_json(w, {"ok": True, "id": pid})
+            else:
+                pid = int(rest[1])
+                pl = self.db.one("SELECT * FROM playlists WHERE id=? AND station_id=?", (pid, sid))
+                if not pl:
+                    raise HTTPError(404, "Playlist inexistent")
+                if m == "GET":
+                    items = [r["path"] for r in self.db.all(
+                        "SELECT path FROM playlist_items WHERE playlist_id=? ORDER BY pos, id", (pid,))]
+                    md = os.path.join(self.data_dir, "stations", cfg["slug"], "music")
+                    return await send_json(w, {**pl, "items": [{"path": p, "exists": os.path.isfile(os.path.join(md, p))}
+                                                               for p in items]})
+                if m == "PUT":
+                    d = await req.json()
+                    if "name" in d or "shuffle" in d:
+                        self.db.exec("UPDATE playlists SET name=?, shuffle=? WHERE id=?",
+                                     ((d.get("name") or pl["name"]).strip()[:80],
+                                      1 if d.get("shuffle", pl["shuffle"]) else 0, pid))
+                    if "items" in d:
+                        md = os.path.join(self.data_dir, "stations", cfg["slug"], "music")
+                        clean = []
+                        for r in d["items"]:
+                            p = os.path.normpath(os.path.join(md, r))
+                            if p.startswith(os.path.normpath(md) + os.sep):
+                                clean.append(os.path.relpath(p, md))
+                        self.db.exec("DELETE FROM playlist_items WHERE playlist_id=?", (pid,))
+                        for i, r in enumerate(clean):
+                            self.db.exec("INSERT INTO playlist_items(playlist_id, path, pos) VALUES(?,?,?)", (pid, r, i))
+                    if "add" in d:
+                        mx = (self.db.one("SELECT MAX(pos) AS m FROM playlist_items WHERE playlist_id=?", (pid,))
+                              or {}).get("m") or 0
+                        for i, r in enumerate(d["add"]):
+                            self.db.exec("INSERT INTO playlist_items(playlist_id, path, pos) VALUES(?,?,?)",
+                                         (pid, self._music_rel(cfg, r), mx + 1 + i))
+                    if adj:
+                        asyncio.create_task(adj.refresh_next())
+                    return await send_json(w, {"ok": True})
+                if m == "DELETE":
+                    self.db.exec("DELETE FROM playlist_items WHERE playlist_id=?", (pid,))
+                    self.db.exec("DELETE FROM schedule WHERE playlist_id=?", (pid,))
+                    self.db.exec("DELETE FROM playlists WHERE id=?", (pid,))
+                    if int(cfg.get("default_playlist") or 0) == pid:
+                        self.db.exec("UPDATE stations SET default_playlist=0 WHERE id=?", (sid,))
+                        if st:
+                            st.cfg["default_playlist"] = 0
+                    if adj:
+                        asyncio.create_task(adj.refresh_next())
+                    return await send_json(w, {"ok": True})
+        if what == "schedule" and m == "PUT":
+            d = await req.json()
+            valid = {p["id"] for p in self._playlists(sid)}
+            rows = []
+            for i, it in enumerate(d.get("items", [])):
+                pid = int(it.get("playlist_id") or 0)
+                days = sorted({int(x) for x in it.get("days") or [] if 1 <= int(x) <= 7})
+                s_, e_ = it.get("start", ""), it.get("end", "")
+                if pid not in valid or not days or not re.fullmatch(r"\d{2}:\d{2}", s_) or \
+                        not re.fullmatch(r"\d{2}:\d{2}", e_):
+                    raise HTTPError(400, "Programare: alege playlistul, zilele și orele (HH:MM)")
+                rows.append((sid, pid, ",".join(map(str, days)), s_, e_, i))
+            self.db.exec("DELETE FROM schedule WHERE station_id=?", (sid,))
+            for r in rows:
+                self.db.exec("INSERT INTO schedule(station_id, playlist_id, days, start, end, pos) VALUES(?,?,?,?,?,?)", r)
+            dp = int(d.get("default_playlist") or 0)
+            if dp and dp not in valid:
+                dp = 0
+            self.db.exec("UPDATE stations SET default_playlist=? WHERE id=?", (dp, sid))
+            if st:
+                st.cfg["default_playlist"] = dp
+                asyncio.create_task(st.autodj.refresh_next())
+            return await send_json(w, {"ok": True})
+        raise HTTPError(404)
 
     async def api_files(self, req, cfg, st):
         m, w = req.method, req.writer

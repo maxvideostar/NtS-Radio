@@ -507,10 +507,112 @@ class AutoDJ:
         self.files = []
         self.jingles = []
         self.fade_in = 0
+        self.manual = []          # coadă manuală (căi absolute) – are prioritate
+        self.pl_sig = None
+        self.pl_order = []
+        self.pl_pos = 0
+        self.active_pl = None     # (id, nume) playlist activ acum
+        self.last_pick_src = None
+        self._load_manual()
 
     @property
     def cfg(self):
         return self.station.cfg
+
+    @property
+    def db(self):
+        return self.station.radio.db
+
+    # ---------- coadă manuală ----------
+    def _load_manual(self):
+        try:
+            md, _ = self.dirs()
+            rel = json.loads(self.db.get_setting(f"queue:{self.station.id}", "[]") or "[]")
+            self.manual = [os.path.join(md, r) for r in rel]
+        except Exception:
+            self.manual = []
+
+    def _save_manual(self):
+        md, _ = self.dirs()
+        self.db.set_setting(f"queue:{self.station.id}",
+                            json.dumps([os.path.relpath(p, md) for p in self.manual], ensure_ascii=False))
+
+    def abs_path(self, rel):
+        md, _ = self.dirs()
+        p = os.path.normpath(os.path.join(md, rel))
+        if not p.startswith(os.path.normpath(md) + os.sep) or not os.path.isfile(p):
+            return None
+        return p
+
+    def rel_path(self, p):
+        md, _ = self.dirs()
+        return os.path.relpath(p, md)
+
+    def queue_set(self, rels):
+        self.manual = [p for p in (self.abs_path(r) for r in rels) if p]
+        self._save_manual()
+
+    async def refresh_next(self):
+        """recalculează piesa următoare (după modificarea cozii / playlistului)"""
+        await self._drop_next()
+        await self.prepare()
+
+    async def _drop_next(self):
+        for _ in range(100):
+            if not self.preparing:
+                break
+            await asyncio.sleep(0.05)
+        n = self.next
+        if n is not None and not n.consumed and not n.announced:
+            self.next = None
+            await n.close()
+            if getattr(n, "from_manual", False) and n.path not in self.manual:
+                self.manual.insert(0, n.path)
+                self._save_manual()
+            elif getattr(n, "from_playlist", False) and self.pl_pos > 0:
+                self.pl_pos -= 1
+
+    async def play_now(self, rel):
+        p = self.abs_path(rel)
+        if not p:
+            return False
+        await self._drop_next()
+        self.manual.insert(0, p)
+        self._save_manual()
+        await self.prepare()
+        await self.skip()
+        return True
+
+    # ---------- playlist activ (programare) ----------
+    def active_playlist(self):
+        from .relay import schedule_active
+        sid = self.station.id
+        rows = self.db.all("SELECT s.*, p.name FROM schedule s JOIN playlists p ON p.id=s.playlist_id "
+                           "WHERE s.station_id=? ORDER BY s.pos, s.id", (sid,))
+        tz = self.station.radio.tz()
+        for r in rows:
+            try:
+                days = [int(x) for x in str(r["days"]).split(",") if x.strip()]
+            except ValueError:
+                continue
+            if schedule_active([{"days": days, "start": r["start"], "end": r["end"]}], tz):
+                return r["playlist_id"], r["name"]
+        dp = int(self.cfg.get("default_playlist") or 0)
+        if dp:
+            r = self.db.one("SELECT name FROM playlists WHERE id=? AND station_id=?", (dp, sid))
+            if r:
+                return dp, r["name"]
+        return None, None
+
+    def playlist_files(self, pid):
+        md, _ = self.dirs()
+        rows = self.db.all("SELECT path FROM playlist_items WHERE playlist_id=? ORDER BY pos, id", (pid,))
+        out = []
+        for r in rows:
+            p = os.path.normpath(os.path.join(md, r["path"]))
+            if p.startswith(os.path.normpath(md) + os.sep) and os.path.isfile(p):
+                out.append(p)
+        return out
 
     def dirs(self):
         base = os.path.join(self.station.radio.data_dir, "stations", self.cfg["slug"])
@@ -543,12 +645,43 @@ class AutoDJ:
 
     def pick(self):
         self.scan()
+        self.last_pick_src = None
+        while self.manual:
+            f = self.manual.pop(0)
+            self._save_manual()
+            if os.path.isfile(f):
+                self.since_jingle += 1
+                self.recent.append(f)
+                self.last_pick_src = "manual"
+                return f, False
         je = int(self.cfg.get("jingle_every") or 0)
         if self.jingles and (not self.files or (je and self.since_jingle >= je)):
             self.since_jingle = 0
             return random.choice(self.jingles), True
         if not self.files:
             return None, False
+        pid, pname = self.active_playlist()
+        self.active_pl = (pid, pname) if pid else None
+        if pid:
+            items = self.playlist_files(pid)
+            if items:
+                shuffle = bool((self.db.one("SELECT shuffle FROM playlists WHERE id=?", (pid,)) or {}).get("shuffle"))
+                sig = (pid, tuple(items), shuffle)
+                if sig != self.pl_sig:
+                    self.pl_sig, self.pl_pos = sig, 0
+                    self.pl_order = list(items)
+                    if shuffle:
+                        random.shuffle(self.pl_order)
+                if self.pl_pos >= len(self.pl_order):
+                    self.pl_pos = 0
+                    if shuffle:
+                        random.shuffle(self.pl_order)
+                f = self.pl_order[self.pl_pos]
+                self.pl_pos += 1
+                self.since_jingle += 1
+                self.recent.append(f)
+                self.last_pick_src = "playlist"
+                return f, False
         if not self.queue:
             q = list(self.files)
             if self.cfg.get("shuffle", 1):
@@ -572,6 +705,8 @@ class AutoDJ:
                 if not path:
                     return
                 t = Track(path, jingle)
+                t.from_manual = self.last_pick_src == "manual"
+                t.from_playlist = self.last_pick_src == "playlist"
                 ok = await t.open()
                 if ok:
                     self.next = t
@@ -667,7 +802,9 @@ class AutoDJ:
                 "current": self.cur.title if self.cur else None,
                 "current_pos": round(self.cur.consumed / BPS) if self.cur else 0,
                 "current_dur": round(self.cur.duration) if self.cur else 0,
-                "next": self.next.title if self.next else None}
+                "next": self.next.title if self.next else None,
+                "queue": len(self.manual),
+                "playlist": self.active_pl[1] if self.active_pl else None}
 
 
 # ======================================================================

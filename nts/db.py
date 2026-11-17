@@ -34,6 +34,12 @@ CREATE TABLE IF NOT EXISTS shows (id INTEGER PRIMARY KEY, station_id INTEGER, na
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, station_id INTEGER, ts INTEGER, type TEXT, detail TEXT);
 CREATE INDEX IF NOT EXISTS ix_events ON events(station_id, ts);
 CREATE TABLE IF NOT EXISTS bans (ip TEXT PRIMARY KEY, reason TEXT, created INTEGER);
+CREATE TABLE IF NOT EXISTS playlists (id INTEGER PRIMARY KEY, station_id INTEGER, name TEXT, shuffle INTEGER DEFAULT 0,
+  created INTEGER);
+CREATE TABLE IF NOT EXISTS playlist_items (id INTEGER PRIMARY KEY, playlist_id INTEGER, path TEXT, pos INTEGER);
+CREATE INDEX IF NOT EXISTS ix_pli ON playlist_items(playlist_id, pos);
+CREATE TABLE IF NOT EXISTS schedule (id INTEGER PRIMARY KEY, station_id INTEGER, playlist_id INTEGER, days TEXT,
+  start TEXT, end TEXT, pos INTEGER);
 """
 
 DEFAULT_OUTPUTS = [
@@ -56,6 +62,8 @@ class DB:
             self.conn.execute("ALTER TABLE stations ADD COLUMN relay TEXT DEFAULT '{}'")
         if "pushes" not in cols:
             self.conn.execute("ALTER TABLE stations ADD COLUMN pushes TEXT DEFAULT '[]'")
+        if "default_playlist" not in cols:
+            self.conn.execute("ALTER TABLE stations ADD COLUMN default_playlist INTEGER DEFAULT 0")
         if "intro" not in cols:
             self.conn.execute("ALTER TABLE stations ADD COLUMN intro TEXT DEFAULT ''")
         if "source_ips" not in cols:

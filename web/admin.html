@@ -50,9 +50,16 @@
       <div id="adj-now" class="small"></div>
       <button class="btn" id="adj-skip">⏭ Sari la următoarea piesă</button>
     </div></div>
-    <div class="grid g2">
-      <div class="card" id="box-music"></div>
-      <div class="card" id="box-jingles"></div>
+    <div class="grid g2" style="align-items:start">
+      <div class="grid">
+        <div class="card" id="box-music"></div>
+        <div class="card" id="box-jingles"></div>
+      </div>
+      <div class="grid">
+        <div class="card" id="box-queue"></div>
+        <div class="card" id="box-playlists"></div>
+        <div class="card" id="box-schedule"></div>
+      </div>
     </div>
   </section>
 
@@ -375,27 +382,153 @@ async function loadAutodj() {
   const sel = $("#adj-st"), prev = sel.value;
   sel.innerHTML = STATIONS.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
   if (prev) sel.value = prev;
-  sel.onchange = () => { renderFiles("music"); renderFiles("jingles"); refreshAdjNow(); };
-  renderFiles("music"); renderFiles("jingles"); refreshAdjNow();
+  sel.onchange = () => { ADJ.editPl = null; renderFiles("music"); renderFiles("jingles"); refreshAdjNow(true); };
+  renderFiles("music"); renderFiles("jingles"); refreshAdjNow(true);
 }
-$("#adj-skip").onclick = () => skip(+$("#adj-st").value).then(() => setTimeout(refreshAdjNow, 500));
-async function refreshAdjNow() {
-  const id = +$("#adj-st").value;
+$("#adj-skip").onclick = () => skip(+$("#adj-st").value).then(() => setTimeout(refreshAdjNow, 600));
+
+/* ---- stare AutoDJ: coadă, playlist-uri, programare ---- */
+const ADJ = {data: null, editPl: null, dragging: false};
+const adjId = () => +$("#adj-st").value;
+async function refreshAdjNow(full) {
+  let d;
+  try { d = await api("GET", `/api/admin/stations/${adjId()}/autodj`); } catch (e) { return; }
+  ADJ.data = d;
+  $("#adj-now").innerHTML = !d.running ? "Post oprit" :
+    `${modeBadge(d.mode)} &nbsp; ▶ <b>${esc(d.current || "—")}</b>${d.current_dur ? ` <span class="muted">${fmtDur(d.current_pos)} / ${fmtDur(d.current_dur)}</span>` : ""}
+     <br><span class="muted">urmează: ${esc(d.next || "—")}</span>
+     <br><span class="muted">sursa pieselor: <b style="color:var(--text-primary)">${d.queue.length ? "coada manuală" : d.active_playlist ? "playlist „" + esc(d.active_playlist.name) + "”" : "toată biblioteca"}</b></span>`;
+  if (!ADJ.dragging) renderQueue();
+  if (full) { renderPlaylists(); renderSchedule(); }
+}
+const baseName = p => p.split("/").pop().replace(/\.[^.]+$/, "");
+
+function makeSortable(container, onDone) {
+  let dragEl = null;
+  $$("[draggable=true]", container).forEach(el => {
+    el.addEventListener("dragstart", e => { dragEl = el; ADJ.dragging = true; el.style.opacity = .4; e.dataTransfer.effectAllowed = "move"; });
+    el.addEventListener("dragend", () => { el.style.opacity = 1; ADJ.dragging = false; dragEl = null;
+      onDone($$("[draggable=true]", container).map(x => x.dataset.path)); });
+    el.addEventListener("dragover", e => {
+      e.preventDefault();
+      if (!dragEl || dragEl === el) return;
+      const r = el.getBoundingClientRect();
+      el.parentNode.insertBefore(dragEl, (e.clientY - r.top) > r.height / 2 ? el.nextSibling : el);
+    });
+  });
+}
+
+function renderQueue() {
+  const box = $("#box-queue"), q = (ADJ.data && ADJ.data.queue) || [];
+  box.innerHTML = `<div class="card-head"><h2>Coadă de redare <span class="muted">(${q.length})</span></h2>${q.length ? `<button class="btn sm danger" id="q-clear">Golește</button>` : ""}</div>
+    <p class="muted small" style="margin-top:-4px">Piesele din coadă au prioritate față de playlist și bibliotecă. Trage-le ca să schimbi ordinea. Adaugi piese din bibliotecă cu ⏭ (următoarea) sau ＋ (la final).</p>
+    <div id="q-list">${q.map((p, i) => `<div class="row q-item" draggable="true" data-path="${esc(p)}" style="padding:6px 8px;border-bottom:1px solid var(--border);cursor:grab;flex-wrap:nowrap">
+      <span class="muted">☰</span><span class="muted mono small" style="width:22px">${i + 1}.</span><span style="flex:1;word-break:break-all">${esc(baseName(p))}</span>
+      <button class="btn sm" data-qplay="${esc(p)}" title="Redă acum">▶</button><button class="btn sm danger" data-qdel="${i}">✕</button></div>`).join("") || `<div class="empty">Coada e goală – AutoDJ urmează playlistul / biblioteca.</div>`}</div>`;
+  if ($("#q-clear", box)) $("#q-clear", box).onclick = () => queueOp("DELETE", {all: true});
+  $$("[data-qdel]", box).forEach(b => b.onclick = () => queueOp("DELETE", {index: +b.dataset.qdel}));
+  $$("[data-qplay]", box).forEach(b => b.onclick = async () => {
+    const i = q.indexOf(b.dataset.qplay);
+    await queueOp("DELETE", {index: i}, true); playNow(b.dataset.qplay);
+  });
+  makeSortable($("#q-list", box), order => queueOp("PUT", {queue: order}));
+}
+async function queueOp(method, body, silent) {
+  try { await api(method, `/api/admin/stations/${adjId()}/queue`, body); if (!silent) refreshAdjNow(); }
+  catch (e) { fail(e); }
+}
+async function playNow(path) {
+  try { await api("POST", `/api/admin/stations/${adjId()}/play-now`, {path}); toast("Se redă acum: " + baseName(path)); setTimeout(refreshAdjNow, 800); }
+  catch (e) { fail(e); }
+}
+
+function renderPlaylists() {
+  const box = $("#box-playlists"), d = ADJ.data;
+  if (!d) return;
+  const E = ADJ.editPl;
+  if (E) {
+    box.innerHTML = `<div class="card-head"><h2>Playlist: ${esc(E.name)}</h2><button class="btn sm" id="pl-close">Închide</button></div>
+      <div class="row" style="margin-bottom:8px"><input id="pl-name" value="${esc(E.name)}" style="flex:1">
+        <label class="chk"><input type="checkbox" id="pl-shuffle" ${E.shuffle ? "checked" : ""}> ordine aleatoare</label></div>
+      <p class="muted small">Adaugi piese din bibliotecă cu butonul <b>＋PL</b> de lângă fiecare piesă. Trage piesele ca să schimbi ordinea.</p>
+      <div id="pl-items" style="max-height:360px;overflow:auto">${E.items.map((p, i) => `<div class="row" draggable="true" data-path="${esc(p)}" style="padding:5px 8px;border-bottom:1px solid var(--border);cursor:grab;flex-wrap:nowrap">
+        <span class="muted">☰</span><span style="flex:1;word-break:break-all">${esc(baseName(p))}</span><button class="btn sm danger" data-pldel="${i}">✕</button></div>`).join("") || `<div class="empty">Playlist gol.</div>`}</div>
+      <div class="row" style="margin-top:10px"><button class="btn" id="pl-all">Adaugă toată biblioteca</button><div class="spacer"></div><span class="muted small">${E.items.length} piese</span><button class="btn primary" id="pl-save">Salvează</button></div>`;
+    $("#pl-close", box).onclick = () => { ADJ.editPl = null; renderPlaylists(); renderFiles("music"); };
+    $$("[data-pldel]", box).forEach(b => b.onclick = () => { E.items.splice(+b.dataset.pldel, 1); renderPlaylists(); });
+    makeSortable($("#pl-items", box), order => { E.items = order; renderPlaylists(); });
+    $("#pl-all", box).onclick = () => { (ADJ.library || []).forEach(p => { if (!E.items.includes(p)) E.items.push(p); }); renderPlaylists(); };
+    $("#pl-save", box).onclick = async () => {
+      E.name = $("#pl-name", box).value.trim() || E.name; E.shuffle = $("#pl-shuffle", box).checked;
+      try { await api("PUT", `/api/admin/stations/${adjId()}/playlists/${E.id}`, {name: E.name, shuffle: E.shuffle ? 1 : 0, items: E.items}); toast("Playlist salvat"); refreshAdjNow(true); }
+      catch (e) { fail(e); }
+    };
+    return;
+  }
+  box.innerHTML = `<div class="card-head"><h2>Playlist-uri <span class="muted">(${d.playlists.length})</span></h2></div>
+    <div class="row" style="margin-bottom:10px"><input id="pl-new" placeholder="Nume playlist nou (ex: Dimineața)" style="flex:1"><button class="btn primary" id="pl-add">Creează</button></div>
+    ${d.playlists.map(p => `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--border)">
+      <b style="flex:1">${esc(p.name)}</b>${d.active_playlist && d.active_playlist.id === p.id ? '<span class="badge ok">activ acum</span>' : ""}
+      <span class="muted small">${p.count} piese${p.shuffle ? " · aleatoriu" : ""}</span>
+      <button class="btn sm" data-pledit="${p.id}">Editează</button><button class="btn sm danger" data-plrm="${p.id}">✕</button></div>`).join("") || `<div class="empty">Niciun playlist. Fără playlist, AutoDJ redă toată biblioteca.</div>`}`;
+  $("#pl-add", box).onclick = async () => {
+    const name = $("#pl-new", box).value.trim();
+    if (!name) return toast("Scrie un nume", true);
+    try { const r = await api("POST", `/api/admin/stations/${adjId()}/playlists`, {name}); await refreshAdjNow(true); editPlaylist(r.id); } catch (e) { fail(e); }
+  };
+  $$("[data-pledit]", box).forEach(b => b.onclick = () => editPlaylist(+b.dataset.pledit));
+  $$("[data-plrm]", box).forEach(b => b.onclick = async () => {
+    if (!await confirmBox("Ștergi playlistul? Fișierele rămân în bibliotecă.")) return;
+    try { await api("DELETE", `/api/admin/stations/${adjId()}/playlists/${b.dataset.plrm}`); refreshAdjNow(true); } catch (e) { fail(e); }
+  });
+}
+async function editPlaylist(pid) {
   try {
-    const d = await api("GET", "/api/admin/overview");
-    const st = d.stations.find(s => s.id === id);
-    $("#adj-now").innerHTML = !st ? "Post oprit" : st.autodj ? `${modeBadge(st.mode)} &nbsp; ▶ <b>${esc(st.autodj.current || "—")}</b>${st.autodj.current_dur ? ` <span class="muted">${fmtDur(st.autodj.current_pos)} / ${fmtDur(st.autodj.current_dur)}</span>` : ""}<br><span class="muted">urmează: ${esc(st.autodj.next || "—")}</span>` : "AutoDJ dezactivat pentru acest post";
-  } catch (e) {}
+    const p = await api("GET", `/api/admin/stations/${adjId()}/playlists/${pid}`);
+    ADJ.editPl = {id: p.id, name: p.name, shuffle: !!p.shuffle, items: p.items.map(i => i.path)};
+    renderPlaylists(); renderFiles("music");
+  } catch (e) { fail(e); }
+}
+
+function schedRowAdj(it, pls) {
+  const d = it.days ? String(it.days).split(",").map(Number) : [1, 2, 3, 4, 5, 6, 7];
+  return `<div class="sched-row adj-sched"><select data-k="pl">${pls.map(p => `<option value="${p.id}"${+it.playlist_id === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select>
+    <span class="days">${WD.map((w, i) => `<label><input type="checkbox" value="${i + 1}"${d.includes(i + 1) ? " checked" : ""}>${w}</label>`).join("")}</span>
+    <input type="time" data-k="start" value="${esc(it.start || "06:00")}"> – <input type="time" data-k="end" value="${esc(it.end || "10:00")}">
+    <button class="btn sm danger" type="button" onclick="this.parentNode.remove()">✕</button></div>`;
+}
+function renderSchedule() {
+  const box = $("#box-schedule"), d = ADJ.data;
+  if (!d) return;
+  const pls = d.playlists;
+  box.innerHTML = `<div class="card-head"><h2>Programare pe ore</h2></div>
+    <p class="muted small" style="margin-top:-4px">În fiecare interval, AutoDJ redă playlistul ales. Primul interval potrivit câștigă. În rest se folosește playlistul implicit.</p>
+    ${pls.length ? `<div id="sch-rows">${d.schedule.map(s => schedRowAdj(s, pls)).join("")}</div>
+    <button class="btn sm" id="sch-add">+ interval</button>
+    <label class="f" style="margin-top:12px">În afara intervalelor<select id="sch-def"><option value="0">Toată biblioteca (aleatoriu)</option>${pls.map(p => `<option value="${p.id}"${d.default_playlist === p.id ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>
+    <div class="row" style="margin-top:12px"><div class="spacer"></div><button class="btn primary" id="sch-save">Salvează programarea</button></div>`
+    : `<div class="empty">Creează întâi un playlist.</div>`}`;
+  if (!pls.length) return;
+  $("#sch-add", box).onclick = () => $("#sch-rows", box).insertAdjacentHTML("beforeend", schedRowAdj({}, pls));
+  $("#sch-save", box).onclick = async () => {
+    const items = $$(".adj-sched", box).map(r => ({playlist_id: +$("[data-k=pl]", r).value, days: $$(".days input:checked", r).map(x => +x.value),
+      start: $("[data-k=start]", r).value, end: $("[data-k=end]", r).value}));
+    try { await api("PUT", `/api/admin/stations/${adjId()}/schedule`, {items, default_playlist: +$("#sch-def", box).value}); toast("Programare salvată"); refreshAdjNow(true); }
+    catch (e) { fail(e); }
+  };
 }
 async function renderFiles(type) {
   const id = +$("#adj-st").value, box = $(type === "music" ? "#box-music" : "#box-jingles");
   const d = await api("GET", `/api/admin/stations/${id}/files?type=${type}`);
+  if (type === "music") ADJ.library = d.files.map(f => f.name);
   const total = d.files.reduce((a, f) => a + f.size, 0);
+  const acts = f => type !== "music" ? "" :
+    `<button class="btn sm" data-pnow="${esc(f.name)}" title="Redă acum">▶</button><button class="btn sm" data-qnext="${esc(f.name)}" title="Pune următoarea">⏭</button><button class="btn sm" data-qend="${esc(f.name)}" title="Adaugă la finalul cozii">＋</button>${ADJ.editPl ? `<button class="btn sm primary" data-pladd="${esc(f.name)}" title="Adaugă în playlistul deschis">＋PL</button>` : ""} `;
   box.innerHTML = `<div class="card-head"><h2>${type === "music" ? "Muzică" : "Jingle-uri"} <span class="muted">(${d.files.length})</span></h2><span class="muted small">${fmtBytes(total)} · liber ${fmtBytes(d.free)}</span></div>
     <div class="drop" data-drop>Trage fișierele aici sau <u>alege fișiere</u><br><span class="small">MP3, AAC, M4A, OGG, FLAC, WAV · se pot urca și prin SFTP în <span class="mono">${esc(d.dir)}</span></span><input type="file" multiple accept="audio/*,.mp3,.aac,.m4a,.ogg,.opus,.flac,.wav" class="hidden"></div>
     <div class="upl small"></div>
     <input placeholder="Caută..." class="flt" style="width:100%;margin:10px 0">
-    <div class="table-wrap" style="max-height:440px"><table><tbody>${d.files.map(f => `<tr data-n="${esc(f.name.toLowerCase())}"><td style="word-break:break-all">${esc(f.name)}</td><td class="num muted small nowrap">${fmtBytes(f.size)}</td><td class="right"><button class="btn sm danger" data-del="${esc(f.name)}">✕</button></td></tr>`).join("") || `<tr><td class="empty">Niciun fișier încă.</td></tr>`}</tbody></table></div>`;
+    <div class="table-wrap" style="max-height:440px"><table><tbody>${d.files.map(f => `<tr data-n="${esc(f.name.toLowerCase())}"><td style="word-break:break-all">${esc(f.name)}</td><td class="num muted small nowrap">${fmtBytes(f.size)}</td><td class="right nowrap">${acts(f)}<button class="btn sm danger" data-del="${esc(f.name)}">✕</button></td></tr>`).join("") || `<tr><td class="empty">Niciun fișier încă.</td></tr>`}</tbody></table></div>`;
   const drop = $("[data-drop]", box), inp = $("input[type=file]", box);
   drop.onclick = () => inp.click();
   inp.onchange = () => upload(type, [...inp.files], box);
@@ -403,6 +536,14 @@ async function renderFiles(type) {
   drop.ondragleave = () => drop.classList.remove("over");
   drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); upload(type, [...e.dataTransfer.files], box); };
   $(".flt", box).oninput = e => { const q = e.target.value.toLowerCase(); $$("tr[data-n]", box).forEach(r => r.classList.toggle("hidden", !r.dataset.n.includes(q))); };
+  $$("[data-pnow]", box).forEach(b => b.onclick = () => playNow(b.dataset.pnow));
+  $$("[data-qnext]", box).forEach(b => b.onclick = async () => { await queueOp("POST", {path: b.dataset.qnext, where: "next"}); toast("Urmează: " + baseName(b.dataset.qnext)); });
+  $$("[data-qend]", box).forEach(b => b.onclick = async () => { await queueOp("POST", {path: b.dataset.qend, where: "end"}); toast("Adăugat în coadă"); });
+  $$("[data-pladd]", box).forEach(b => b.onclick = () => {
+    if (!ADJ.editPl) return;
+    if (!ADJ.editPl.items.includes(b.dataset.pladd)) ADJ.editPl.items.push(b.dataset.pladd);
+    renderPlaylists(); toast("Adăugat în playlist (nu uita Salvează)");
+  });
   $$("[data-del]", box).forEach(b => b.onclick = async () => {
     if (!await confirmBox(`Ștergi „${b.dataset.del}”?`)) return;
     try { await api("DELETE", `/api/admin/stations/${id}/files?type=${type}&name=${encodeURIComponent(b.dataset.del)}`); renderFiles(type); } catch (e) { fail(e); }
