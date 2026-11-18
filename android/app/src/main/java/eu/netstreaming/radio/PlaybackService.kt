@@ -125,14 +125,29 @@ class PlaybackService : MediaLibraryService() {
         val stationName = st?.name ?: cur.mediaMetadata.station?.toString() ?: cur.mediaMetadata.title?.toString() ?: ""
         val title = if (song.isNotBlank() && song != stationName) song else stationName
         if (cur.mediaMetadata.title?.toString() == title) return
+        val logo = st?.logo?.takeIf { it.isNotBlank() }?.let { android.net.Uri.parse(it) }
         val md = cur.mediaMetadata.buildUpon()
             .setTitle(title)
             .setDisplayTitle(title)
             .setArtist(stationName)
             .setSubtitle(stationName)
             .setStation(stationName)
+            .setArtworkUri(logo ?: cur.mediaMetadata.artworkUri)
             .build()
         player.replaceMediaItem(idx, cur.buildUpon().setMediaMetadata(md).build())
+
+        // coperta piesei (iTunes) -> notificare, ecran blocat, Android Auto
+        if (title == stationName) return
+        val mediaId = cur.mediaId
+        io.execute {
+            val cover = runCatching { Covers.find(title) }.getOrNull() ?: return@execute
+            main.post {
+                val now = player.currentMediaItem ?: return@post
+                if (now.mediaId != mediaId || now.mediaMetadata.title?.toString() != title) return@post
+                val md2 = now.mediaMetadata.buildUpon().setArtworkUri(android.net.Uri.parse(cover)).build()
+                player.replaceMediaItem(player.currentMediaItemIndex, now.buildUpon().setMediaMetadata(md2).build())
+            }
+        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
