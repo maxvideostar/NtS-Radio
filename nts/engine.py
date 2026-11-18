@@ -1003,6 +1003,8 @@ class Station:
         title = (title or "").strip()
         if not title or title == self.title:
             return
+        if self.title and self.title != self.cfg.get("name"):
+            self.prev_title = self.title
         self.title = title
         for p in self.pushes:
             p.notify_title(title)

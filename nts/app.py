@@ -1071,6 +1071,8 @@ class Radio:
                 return await send_json(w, {"ok": True})
             if rest == ["files"]:
                 return await self.api_files(req, cfg, st)
+            if rest == ["waveform"] and m == "GET":
+                return await self.api_waveform(req, cfg)
             if rest and rest[0] in ("autodj", "queue", "play-now", "playlists", "schedule"):
                 return await self.api_autodj(req, sid, cfg, st, rest)
         if seg == ["jingles-all"]:
@@ -1211,6 +1213,43 @@ class Radio:
             raise HTTPError(400, f"Fișier inexistent: {rel}")
         return os.path.relpath(p, md)
 
+    async def api_waveform(self, req, cfg):
+        """forma de undă a unui fișier din folderul postului (pentru playerul AutoDJ din panou)"""
+        base = os.path.normpath(os.path.join(self.data_dir, "stations", cfg["slug"]))
+        p = os.path.normpath(os.path.join(base, req.query.get("file", "")))
+        if not p.startswith(base + os.sep) or not os.path.isfile(p):
+            raise HTTPError(404)
+        n = max(50, min(1000, int(req.query.get("n", 400))))
+        key = (p, int(os.path.getmtime(p)), n)
+        cache = getattr(self, "_wave_cache", None)
+        if cache is None:
+            cache = self._wave_cache = {}
+        if key not in cache:
+            from .engine import FFMPEG
+            proc = await asyncio.create_subprocess_exec(
+                FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", p, "-vn", "-ac", "1", "-ar", "4000",
+                "-f", "s16le", "pipe:1", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+            raw, _ = await asyncio.wait_for(proc.communicate(), 60)
+
+            def calc():
+                from array import array
+                a = array("h")
+                a.frombytes(raw[:len(raw) // 2 * 2])
+                if not a:
+                    return []
+                step = max(1, len(a) // n)
+                peaks = []
+                for i in range(0, step * n, step):
+                    seg = a[i:i + step]
+                    peaks.append(max(max(seg), -min(seg)) if seg else 0)
+                mx = max(peaks) or 1
+                return [round(v / mx, 3) for v in peaks]
+            peaks = await asyncio.to_thread(calc)
+            if len(cache) > 60:
+                cache.clear()
+            cache[key] = peaks
+        return await send_json(req.writer, {"peaks": cache[key]}, headers={"Cache-Control": "max-age=3600"})
+
     def _playlists(self, sid):
         return self.db.all("SELECT p.id, p.name, p.shuffle, (SELECT COUNT(*) FROM playlist_items i "
                            "WHERE i.playlist_id=p.id) AS count FROM playlists p WHERE p.station_id=? "
@@ -1228,9 +1267,16 @@ class Radio:
             return await send_json(w, {
                 "running": bool(st), "mode": st.mode if st else "off",
                 "current": adj.cur.title if adj and adj.cur else None,
-                "current_pos": round(adj.cur.consumed / 176400) if adj and adj.cur else 0,
-                "current_dur": round(adj.cur.duration) if adj and adj.cur else 0,
+                "current_pos": round(adj.cur.consumed / 176400, 1) if adj and adj.cur else 0,
+                "current_dur": round(adj.cur.duration, 1) if adj and adj.cur else 0,
+                "current_file": os.path.relpath(adj.cur.path, os.path.join(self.data_dir, "stations", cfg["slug"]))
+                if adj and adj.cur else None,
+                "current_jingle": bool(adj and adj.cur and adj.cur.jingle),
                 "next": adj.next.title if adj and adj.next else None,
+                "next_dur": round(adj.next.duration) if adj and adj.next else 0,
+                "next_jingle": bool(adj and adj.next and adj.next.jingle),
+                "prev": getattr(st, "prev_title", None) if st else None,
+                "on_air_title": st.title if st else None,
                 "queue": q, "playlists": self._playlists(sid), "schedule": sched,
                 "default_playlist": int(cfg.get("default_playlist") or 0),
                 "active_playlist": {"id": active[0], "name": active[1]} if active[0] else None})

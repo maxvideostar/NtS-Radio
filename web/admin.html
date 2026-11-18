@@ -10,6 +10,18 @@
 .drop.over{border-color:var(--accent);color:var(--text-primary)}
 .prog{height:4px;background:var(--surface-3);border-radius:2px;overflow:hidden;margin-top:8px}.prog div{height:100%;background:var(--accent);width:0}
 .studio-box td{padding:6px 8px}
+.deck{display:grid;grid-template-columns:150px 1fr 1.5fr 1fr;gap:6px;margin-bottom:14px;align-items:start}
+.dk-clock{background:#fff;color:#111;border-radius:6px;height:64px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-variant-numeric:tabular-nums}
+.dk-clock #dk-time{font-size:22px;font-weight:700} .dk-clock #dk-hour{font-size:18px;font-weight:700;color:#0d8a80}
+.dk-col{min-width:0}
+.dk-box{position:relative;height:64px;border-radius:4px;overflow:hidden;display:flex;align-items:center;justify-content:center;padding:0 10px;color:#111}
+.dk-prev{background:#ffc996} .dk-next{background:#eef1bb} .dk-cur{background:#b8f5b0;padding:0}
+.dk-cur.live{background:#ffb3b3} .dk-cur.idle{background:#d6d6d0}
+.dk-t{position:relative;z-index:2;text-align:center;font-weight:700;font-size:15px;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;padding:0 10px}
+.dk-cur .dk-t{color:#333;text-shadow:0 0 4px rgba(255,255,255,.8)}
+#dk-wave{position:absolute;inset:0;width:100%;height:100%;z-index:1}
+.dk-times{display:flex;justify-content:space-between;font-size:13px;margin-top:3px;font-variant-numeric:tabular-nums;gap:6px}
+@media(max-width:900px){.deck{grid-template-columns:1fr 1fr}.dk-clock{grid-column:1/-1}}
 .sub-box{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px}
 .sched-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
 .sched-row .days label{display:inline-flex;gap:3px;align-items:center;margin-right:6px;font-size:12px;color:var(--text-secondary)}
@@ -50,6 +62,13 @@
       <div id="adj-now" class="small"></div>
       <button class="btn" id="adj-skip">⏭ Sari la următoarea piesă</button>
     </div></div>
+    <div class="deck" id="deck">
+      <div class="dk-clock"><div id="dk-time">--:--:--</div><div id="dk-hour" title="timp rămas până la ora fixă">--:--</div></div>
+      <div class="dk-col"><div class="dk-box dk-prev"><div class="dk-t" id="dk-prev">—</div></div><div class="dk-times"><span class="muted">anterioara</span></div></div>
+      <div class="dk-col"><div class="dk-box dk-cur" id="dk-curbox"><canvas id="dk-wave"></canvas><div class="dk-t" id="dk-cur">—</div></div>
+        <div class="dk-times"><b id="dk-el"></b><span id="dk-src" class="muted"></span><b id="dk-rem"></b></div></div>
+      <div class="dk-col"><div class="dk-box dk-next"><div class="dk-t" id="dk-next">—</div></div><div class="dk-times"><span class="muted">urmează</span><b id="dk-nextdur"></b></div></div>
+    </div>
     <div class="grid g2" style="align-items:start">
       <div class="grid">
         <div class="card" id="box-music"></div>
@@ -394,7 +413,8 @@ async function refreshAdjNow(full) {
   let d;
   try { d = await api("GET", `/api/admin/stations/${adjId()}/autodj`); } catch (e) { return; }
   ADJ.data = d;
-  $("#adj-now").innerHTML = !d.running ? "Post oprit" :
+  deckUpdate(d);
+  $("#adj-now").innerHTML =!d.running ? "Post oprit" :
     `${modeBadge(d.mode)} &nbsp; ▶ <b>${esc(d.current || "—")}</b>${d.current_dur ? ` <span class="muted">${fmtDur(d.current_pos)} / ${fmtDur(d.current_dur)}</span>` : ""}
      <br><span class="muted">urmează: ${esc(d.next || "—")}</span>
      <br><span class="muted">sursa pieselor: <b style="color:var(--text-primary)">${d.queue.length ? "coada manuală" : d.active_playlist ? "playlist „" + esc(d.active_playlist.name) + "”" : "toată biblioteca"}</b></span>`;
@@ -402,6 +422,60 @@ async function refreshAdjNow(full) {
   if (full) { renderPlaylists(); renderSchedule(); }
 }
 const baseName = p => p.split("/").pop().replace(/\.[^.]+$/, "");
+
+/* ---- player AutoDJ (anterioara | curenta cu forma de undă | următoarea) ---- */
+const DECK = {pos: 0, dur: 0, at: 0, file: null, peaks: null, mode: "off", timer: null};
+const mmss = s => { s = Math.max(0, s); const m = Math.floor(s / 60), r = s - m * 60; return `${String(m).padStart(2, "0")}:${r.toFixed(1).padStart(4, "0")}`; };
+function deckUpdate(d) {
+  DECK.mode = d.running ? d.mode : "off";
+  DECK.pos = d.current_pos || 0; DECK.dur = d.current_dur || 0; DECK.at = performance.now();
+  const box = $("#dk-curbox");
+  box.classList.toggle("live", DECK.mode === "live" || DECK.mode === "relay");
+  box.classList.toggle("idle", DECK.mode === "off" || DECK.mode === "silence");
+  $("#dk-prev").textContent = d.prev || "—";
+  if (DECK.mode === "autodj") {
+    $("#dk-cur").textContent = (d.current_jingle ? "🔔 " : "") + (d.current || "—");
+    $("#dk-next").textContent = (d.next_jingle ? "🔔 " : "") + (d.next || "—");
+    $("#dk-nextdur").textContent = d.next_dur ? mmss(d.next_dur).slice(0, 5) : "";
+    $("#dk-src").textContent = d.queue.length ? "coadă" : d.active_playlist ? d.active_playlist.name : "bibliotecă";
+    if (d.current_file !== DECK.file) {
+      DECK.file = d.current_file; DECK.peaks = null;
+      if (d.current_file) api("GET", `/api/admin/stations/${adjId()}/waveform?file=${encodeURIComponent(d.current_file)}&n=400`)
+        .then(r => { if (DECK.file === d.current_file) DECK.peaks = r.peaks; }).catch(() => {});
+    }
+  } else {
+    $("#dk-cur").textContent = (DECK.mode === "live" ? "🔴 LIVE · " : DECK.mode === "relay" ? "📡 RELAY · " : "") + (d.on_air_title || "—");
+    $("#dk-next").textContent = d.next ? "AutoDJ: " + d.next : "—";
+    $("#dk-nextdur").textContent = ""; $("#dk-src").textContent = DECK.mode === "live" ? "studio" : DECK.mode;
+    DECK.file = null; DECK.peaks = null;
+  }
+  if (!DECK.timer) DECK.timer = setInterval(deckTick, 100);
+}
+function deckTick() {
+  if (cur !== "autodj") { clearInterval(DECK.timer); DECK.timer = null; return; }
+  const now = new Date();
+  $("#dk-time").textContent = now.toLocaleTimeString("ro-RO", {hour: "2-digit", minute: "2-digit", second: "2-digit"});
+  const toHour = 3600 - (now.getMinutes() * 60 + now.getSeconds());
+  $("#dk-hour").textContent = `${String(Math.floor(toHour / 60)).padStart(2, "0")}:${String(toHour % 60).padStart(2, "0")}`;
+  const cv = $("#dk-wave"), W = cv.clientWidth, H = cv.clientHeight, dpr = window.devicePixelRatio || 1;
+  if (cv.width !== W * dpr || cv.height !== H * dpr) { cv.width = W * dpr; cv.height = H * dpr; }
+  const g = cv.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  if (DECK.mode !== "autodj" || !DECK.dur) { $("#dk-el").textContent = ""; $("#dk-rem").textContent = ""; return; }
+  const el = Math.min(DECK.dur, DECK.pos + (performance.now() - DECK.at) / 1000), frac = el / DECK.dur, px = frac * W;
+  g.fillStyle = "rgba(60,200,60,.45)"; g.fillRect(0, 0, px, H);
+  if (DECK.peaks && DECK.peaks.length) {
+    const n = DECK.peaks.length, bw = W / n;
+    for (let i = 0; i < n; i++) {
+      const h = Math.max(1, DECK.peaks[i] * (H - 6)), x = i * bw;
+      g.fillStyle = x < px ? "rgba(20,90,20,.55)" : "rgba(80,110,160,.35)";
+      g.fillRect(x, H - h, Math.max(1, bw - .6), h);
+    }
+  }
+  g.fillStyle = "#1a5"; g.fillRect(px - 1, 0, 2, H);
+  $("#dk-el").textContent = mmss(el);
+  $("#dk-rem").textContent = "– " + mmss(DECK.dur - el);
+}
 
 function makeSortable(container, onDone) {
   let dragEl = null;
