@@ -17,6 +17,8 @@ Opțiuni:
   --max-ore ORE        se oprește după atâtea ore (implicit: nelimitat)
   --offset SEC         mută punctul de tăiere (titlul vine cu întârziere față de sunet: valoare
                        pozitivă = taie mai devreme). Implicit 0
+  --cauta SEC          analiză audio: caută pauza / liniștea dintre piese în ±SEC secunde în jurul
+                       schimbării de titlu și taie acolo (necesită ffmpeg). Implicit 6, 0 = dezactivat
   --pastreaza-prima    păstrează și prima piesă (prinsă de la jumătate), cu sufixul „(incomplet)”
   --continuu           salvează în plus și toată emisia într-un singur fișier
   --ignora TEXT        titluri de ignorat (ex: numele postului, „reclama”). Se poate repeta.
@@ -29,12 +31,15 @@ import os
 import re
 import socket
 import ssl
+import shutil
 import struct
+import subprocess
 import sys
 import time
 import urllib.parse
 
 UA = "nts-rip/1.0"
+FFMPEG = shutil.which("ffmpeg")
 
 
 def log(msg):
@@ -272,14 +277,68 @@ class Ripper:
         self.open_track(title)
         self.split_at = None
 
+    # ---- analiză audio: caută momentul cel mai liniștit în jurul schimbării de titlu ----
+    def smart_cut(self, center):
+        win = int(self.a.cauta * self.byterate)
+        a, b = max(0, center - win), min(len(self.pending), center + win)
+        seg = bytes(self.pending[a:b])
+        if len(seg) < self.byterate or not FFMPEG:
+            return center
+        fmt = {".mp3": "mp3", ".aac": "aac", ".ogg": "ogg"}.get(self.ext, "mp3")
+        try:
+            pcm = subprocess.run([FFMPEG, "-hide_banner", "-loglevel", "quiet", "-f", fmt, "-i", "pipe:0",
+                                  "-ac", "1", "-ar", "8000", "-f", "s16le", "pipe:1"],
+                                 input=seg, capture_output=True, timeout=20).stdout
+        except Exception:
+            return center
+        from array import array
+        x = array("h")
+        x.frombytes(pcm[:len(pcm) // 2 * 2])
+        blk = 160                                    # 20 ms
+        nb = len(x) // blk
+        if nb < 20:
+            return center
+        en = [sum(v * v for v in x[i * blk:(i + 1) * blk]) / blk for i in range(nb)]
+        sm = [sum(en[max(0, i - 4):i + 5]) / len(en[max(0, i - 4):i + 5]) for i in range(nb)]   # ~180 ms
+        i_min = min(range(nb), key=lambda i: sm[i])
+        med = sorted(sm)[nb // 2] or 1
+        if sm[i_min] > med * 0.35:
+            # nicio pauză clară (mix continuu): păstrăm punctul dat de titlu
+            log("✂  fără pauză clară – tai la schimbarea titlului")
+            return center
+        # zona liniștită (toate blocurile apropiate de minim) cea mai apropiată de titlu -> tăiem la mijlocul ei
+        thr = max(sm[i_min] * 2.5, med * 0.02)
+        i_center = int((center - a) / max(1, len(seg)) * nb)
+        runs, s0 = [], None
+        for i in range(nb + 1):
+            q = i < nb and sm[i] <= thr
+            if q and s0 is None:
+                s0 = i
+            elif not q and s0 is not None:
+                runs.append((s0, i - 1))
+                s0 = None
+        if runs:
+            r0, r1 = min(runs, key=lambda r: 0 if r[0] <= i_center <= r[1] else min(abs(r[0] - i_center),
+                                                                                       abs(r[1] - i_center)))
+            i_min = (r0 + r1) // 2
+        t_cut = (i_min + 0.5) * blk / 8000
+        secs = len(x) / 8000
+        pos = a + int(t_cut / secs * len(seg))
+        delta = (pos - center) / self.byterate
+        db = 10 * __import__("math").log10(max(sm[i_min], 1) / med)
+        log(f"✂  tăiat la {delta:+.1f}s față de titlu (pauză {db:.0f} dB)")
+        return pos
+
     def feed(self, data):
-        """audio nou. Cu --offset pozitiv ținem câteva secunde în buffer ca să putem tăia mai devreme;
-        cu --offset negativ amânăm tăierea până se adună audio-ul în plus."""
+        """audio nou. Ținem în buffer câteva secunde (pentru --offset și analiza audio),
+        iar tăierea se face după ce avem destul audio și după punctul de schimbare."""
         self.pending += data
-        if self.split_at is not None and len(self.pending) >= self.split_at[0]:
-            self.do_split(*self.split_at)
+        if self.split_at is not None and len(self.pending) >= self.split_at[2]:
+            center, title, _ = self.split_at
+            pos = self.smart_cut(center) if self.a.cauta > 0 else center
+            self.do_split(pos, title)
         if self.split_at is None:
-            lag = int(max(0.0, self.a.offset) * self.byterate)
+            lag = int((max(0.0, self.a.offset) + max(0.0, self.a.cauta)) * self.byterate)
             if len(self.pending) > lag:
                 n = len(self.pending) - lag
                 self.write_audio(bytes(self.pending[:n]))
@@ -292,11 +351,13 @@ class Ripper:
             self.open_track(title)
             return
         if self.split_at is not None:          # titlul s-a schimbat din nou înainte de tăiere
-            self.do_split(*self.split_at)
+            self.do_split(self.split_at[0], self.split_at[1])
             if title == self.cur_title:
                 return
         shift = int(self.a.offset * self.byterate)   # pozitiv = taie mai devreme
-        self.split_at = (max(0, len(self.pending) - shift), title)
+        center = max(0, len(self.pending) - shift)
+        need = center + int(max(0.0, self.a.cauta) * self.byterate)
+        self.split_at = (center, title, need)
         self.feed(b"")
 
     def run(self):
@@ -367,6 +428,8 @@ def main():
     ap.add_argument("--min", type=float, default=60)
     ap.add_argument("--max-ore", type=float, default=0)
     ap.add_argument("--offset", type=float, default=0)
+    ap.add_argument("--cauta", type=float, default=6,
+                    help="caută pauza dintre piese în ±N secunde în jurul schimbării de titlu (0 = dezactivat)")
     ap.add_argument("--pastreaza-prima", action="store_true")
     ap.add_argument("--continuu", action="store_true")
     ap.add_argument("--ignora", action="append")
