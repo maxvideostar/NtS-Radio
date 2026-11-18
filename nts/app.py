@@ -38,6 +38,8 @@ class Radio:
         self.login_fail = {}
         self.src_fails = {}
         self.cpu_prev = None
+        from .recorder import Recorder
+        self.recorder = Recorder(self)
 
     # ------------------------------------------------------------------ pornire
     async def start(self):
@@ -53,6 +55,7 @@ class Radio:
         self.geo.update_async()
         asyncio.create_task(self.snapshot_loop())
         asyncio.create_task(self.housekeeping_loop())
+        self.recorder.start_all()
         await asyncio.gather(srv.server.serve_forever(), sc.serve_forever())
 
     def first_run(self):
@@ -118,6 +121,7 @@ class Radio:
                 st.tick_peak()
             if n % 720 == 0:      # o dată pe oră
                 self.db.exec("DELETE FROM sessions WHERE last < ?", (now() - SESSION_TTL,))
+                self.recorder.cleanup()
                 self.geo.update_async()
                 keep = int(self.db.get_setting("retention_days", "730") or 730)
                 lim = now() - keep * 86400
@@ -350,7 +354,8 @@ class Radio:
             return
         country = self.geo.country(req.ip)
         l = Listener(req, st, hub, country)
-        if req.query.get("monitor") == "1" and self.current_user(req):
+        if (req.query.get("monitor") == "1" and self.current_user(req)) or \
+                (req.peer_ip in ("127.0.0.1", "::1") and not req.via_proxy and l.ua.startswith("nts-rip")):
             l.internal = True
         elif req.method == "GET":
             try:
@@ -1075,6 +1080,8 @@ class Radio:
                 return await self.api_waveform(req, cfg)
             if rest and rest[0] in ("autodj", "queue", "play-now", "playlists", "schedule"):
                 return await self.api_autodj(req, sid, cfg, st, rest)
+        if seg[:1] == ["recordings"]:
+            return await self.api_recordings(req, seg[1:])
         if seg == ["jingles-all"]:
             res = []
             for cfg in self.db.stations():
@@ -1212,6 +1219,136 @@ class Radio:
         if not p.startswith(os.path.normpath(md) + os.sep) or not os.path.isfile(p):
             raise HTTPError(400, f"Fișier inexistent: {rel}")
         return os.path.relpath(p, md)
+
+    # ------------------------------------------------------------------ Înregistrări
+    def _rec_payload(self, d, e=None):
+        e = e or {}
+        name = (d.get("name", e.get("name")) or "").strip()[:80]
+        url = (d.get("url", e.get("url")) or "").strip()
+        if not name:
+            raise HTTPError(400, "Dă un nume înregistrării")
+        if not re.match(r"^https?://", url, re.I):
+            raise HTTPError(400, "Adresa stream-ului trebuie să înceapă cu http:// sau https://")
+
+        def num(k, default, typ=int):
+            try:
+                return typ(d.get(k, e.get(k, default)))
+            except (TypeError, ValueError):
+                return default
+        return {"name": name, "url": url, "min_sec": max(0, num("min_sec", 60)),
+                "offset_sec": max(-30.0, min(30.0, num("offset_sec", 0, float))),
+                "continuu": 1 if d.get("continuu", e.get("continuu")) else 0,
+                "keep_days": max(0, num("keep_days", 0)),
+                "ignore_list": (d.get("ignore_list", e.get("ignore_list")) or "").strip()[:300]}
+
+    async def api_recordings(self, req, seg):
+        m, w, R = req.method, req.writer, self.recorder
+        if not seg:
+            if m == "GET":
+                return await send_json(w, {"jobs": [j.info() for j in R.jobs.values()],
+                                           "disk_free": shutil.disk_usage(self.data_dir).free,
+                                           "stations": [{"name": s["name"], "slug": s["slug"]} for s in self.db.stations()],
+                                           "port": self.port})
+            if m == "POST":
+                d = self._rec_payload(await req.json())
+                jid = self.db.exec("INSERT INTO rec_jobs(name,url,min_sec,offset_sec,continuu,keep_days,ignore_list,enabled,created) "
+                                   "VALUES(?,?,?,?,?,?,?,1,?)", (d["name"], d["url"], d["min_sec"], d["offset_sec"],
+                                                                  d["continuu"], d["keep_days"], d["ignore_list"], now()))
+                R.reload(jid).start()
+                return await send_json(w, {"ok": True, "id": jid})
+        jid = int(seg[0])
+        j = R.jobs.get(jid)
+        if not j:
+            raise HTTPError(404, "Înregistrare inexistentă")
+        rest = seg[1:]
+        if not rest and m == "PUT":
+            d = await req.json()
+            act = d.get("action")
+            if act in ("start", "stop"):
+                self.db.exec("UPDATE rec_jobs SET enabled=? WHERE id=?", (1 if act == "start" else 0, jid))
+                R.reload(jid)
+                if act == "start":
+                    j.start()
+                else:
+                    await j.stop()
+                return await send_json(w, {"ok": True})
+            p = self._rec_payload(d, j.cfg)
+            self.db.exec("UPDATE rec_jobs SET name=?,url=?,min_sec=?,offset_sec=?,continuu=?,keep_days=?,ignore_list=? WHERE id=?",
+                         (p["name"], p["url"], p["min_sec"], p["offset_sec"], p["continuu"], p["keep_days"], p["ignore_list"], jid))
+            running = bool(j.task)
+            old_dir = j.dir
+            await j.stop()
+            R.reload(jid)
+            if j.dir != old_dir and os.path.isdir(old_dir) and not os.path.exists(j.dir):
+                os.rename(old_dir, j.dir)
+            if running:
+                j.start()
+            return await send_json(w, {"ok": True})
+        if not rest and m == "DELETE":
+            await j.stop()
+            if req.query.get("files") == "1" and os.path.isdir(j.dir):
+                shutil.rmtree(j.dir, ignore_errors=True)
+            self.db.exec("DELETE FROM rec_jobs WHERE id=?", (jid,))
+            R.jobs.pop(jid, None)
+            return await send_json(w, {"ok": True})
+        if rest == ["files"]:
+            return await send_json(w, {"files": j.files(), "dir": j.dir})
+        if rest == ["log"]:
+            return await send_json(w, {"lines": list(j.lines)[-200:]})
+        if rest == ["file"]:
+            name = os.path.basename(req.query.get("name", ""))
+            p = os.path.join(j.dir, name)
+            if not name or not os.path.isfile(p):
+                raise HTTPError(404)
+            if m == "DELETE":
+                os.remove(p)
+                return await send_json(w, {"ok": True})
+            return await self.send_media(req, p, req.query.get("dl") == "1")
+        raise HTTPError(404)
+
+    async def send_media(self, req, path, download=False):
+        """trimite un fișier audio în bucăți, cu suport Range (derulare în player)"""
+        size = os.path.getsize(path)
+        ext = os.path.splitext(path)[1].lower()
+        ctype = {".mp3": "audio/mpeg", ".aac": "audio/aac", ".ogg": "audio/ogg", ".m4a": "audio/mp4"}.get(ext,
+                                                                                                        "application/octet-stream")
+        start, end, code = 0, size - 1, 200
+        rng = req.headers.get("range", "")
+        mm = re.match(r"bytes=(\d*)-(\d*)", rng)
+        if mm and size:
+            if mm.group(1):
+                start = int(mm.group(1))
+                end = int(mm.group(2)) if mm.group(2) else size - 1
+            elif mm.group(2):
+                start = max(0, size - int(mm.group(2)))
+            end = min(end, size - 1)
+            if start > end:
+                start, end = 0, size - 1
+            else:
+                code = 206
+        length = end - start + 1
+        fname = urllib.parse.quote(os.path.basename(path))
+        h = [f"HTTP/1.1 {code} {'Partial Content' if code == 206 else 'OK'}", f"Content-Type: {ctype}",
+             f"Content-Length: {length}", "Accept-Ranges: bytes", "Connection: close", "Cache-Control: no-store",
+             f"Content-Disposition: {'attachment' if download else 'inline'}; filename*=UTF-8''{fname}"]
+        if code == 206:
+            h.append(f"Content-Range: bytes {start}-{end}/{size}")
+        req.taken = True
+        w = req.writer
+        w.write(("\r\n".join(h) + "\r\n\r\n").encode())
+        if req.method == "HEAD":
+            await w.drain()
+            return
+        with open(path, "rb") as f:
+            f.seek(start)
+            left = length
+            while left > 0:
+                chunk = f.read(min(262144, left))
+                if not chunk:
+                    break
+                w.write(chunk)
+                left -= len(chunk)
+                await asyncio.wait_for(w.drain(), 60)
 
     async def api_waveform(self, req, cfg):
         """forma de undă a unui fișier din folderul postului (pentru playerul AutoDJ din panou)"""

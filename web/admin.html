@@ -35,6 +35,7 @@
     <button data-t="dash" class="active">Dashboard</button>
     <button data-t="stations">Posturi</button>
     <button data-t="autodj">AutoDJ</button>
+    <button data-t="rec">Înregistrări</button>
     <button data-t="listeners">Ascultători</button>
     <button data-t="users">Utilizatori</button>
     <button data-t="events">Evenimente</button>
@@ -80,6 +81,25 @@
         <div class="card" id="box-schedule"></div>
       </div>
     </div>
+  </section>
+
+  <section id="t-rec" class="hidden">
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-head"><h2>Înregistrare nouă</h2><span class="muted small" id="rec-free"></span></div>
+      <p class="muted small" style="margin-top:-6px">Înregistrează un stream (un post propriu sau orice radio online) și salvează fiecare piesă separat, cu numele luat din titlul emisiei.</p>
+      <div class="grid g4">
+        <label class="f">Nume<input id="rn-name" placeholder="ex: Pescobar"></label>
+        <label class="f">Sursa<select id="rn-src"></select></label>
+        <label class="f" style="grid-column:span 2">Adresa stream-ului<input id="rn-url" placeholder="http://server:8000/live"></label>
+        <label class="f">Șterge piesele sub (secunde)<input id="rn-min" type="number" value="60" min="0"></label>
+        <label class="f">Decalaj tăiere (secunde)<input id="rn-offset" type="number" value="0" step="0.5"></label>
+        <label class="f">Păstrează fișierele (zile, 0 = mereu)<input id="rn-keep" type="number" value="0" min="0"></label>
+        <label class="f">Ignoră titlurile care conțin<input id="rn-ign" placeholder="reclama, stiri"></label>
+      </div>
+      <div class="row" style="margin-top:12px"><label class="chk"><input type="checkbox" id="rn-cont"> Salvează și toată emisia într-un fișier</label><div class="spacer"></div><button class="btn primary" id="rn-go">⏺ Pornește înregistrarea</button></div>
+    </div>
+    <div class="grid g2" id="rec-jobs"></div>
+    <div class="card hidden" id="rec-files" style="margin-top:14px"></div>
   </section>
 
   <section id="t-listeners" class="hidden">
@@ -156,10 +176,11 @@ function show(t) {
   location.hash = t;
   clearInterval(timer); timer = null;
   ({dash: loadDash, stations: loadStations, autodj: loadAutodj, listeners: loadListeners, users: loadUsers,
-    events: loadEvents, settings: loadSettings})[t]();
+    events: loadEvents, settings: loadSettings, rec: loadRec})[t]();
   if (t === "dash") timer = setInterval(loadDash, 2000);
   if (t === "listeners") timer = setInterval(loadListeners, 5000);
   if (t === "autodj") timer = setInterval(refreshAdjNow, 3000);
+  if (t === "rec") timer = setInterval(() => loadRec(true), 3000);
 }
 $("#logout").onclick = async () => { await api("POST", "/api/logout"); location.href = "/login"; };
 
@@ -643,6 +664,114 @@ async function upload(type, files, box) {
   renderFiles(type);
 }
 
+/* ================= ÎNREGISTRĂRI ================= */
+const REC = {data: null, sel: null, filesAt: 0, inited: false};
+async function loadRec(tick) {
+  let d;
+  try { d = await api("GET", "/api/admin/recordings"); } catch (e) { return; }
+  REC.data = d;
+  $("#rec-free").textContent = "spațiu liber: " + fmtBytes(d.disk_free);
+  if (!REC.inited) {
+    REC.inited = true;
+    $("#rn-src").innerHTML = `<option value="">Alt stream (adresă)</option>` + d.stations.map(s => `<option value="${esc(s.slug)}">Post propriu: ${esc(s.name)}</option>`).join("");
+    $("#rn-src").onchange = e => {
+      const slug = e.target.value;
+      $("#rn-url").value = slug ? `http://127.0.0.1:${d.port}/${slug}` : "";
+      $("#rn-url").disabled = !!slug;
+      if (slug && !$("#rn-name").value) $("#rn-name").value = d.stations.find(s => s.slug === slug).name;
+    };
+  }
+  const box = $("#rec-jobs");
+  box.innerHTML = d.jobs.map(j => {
+    const st = j.state === "recording" ? `<span class="badge live">înregistrează</span>` : j.state === "connecting" ? `<span class="badge autodj">conectare...</span>` :
+      j.state === "error" ? `<span class="badge err">reconectare</span>` : `<span class="badge off">oprit</span>`;
+    return `<div class="card"><div class="card-head"><h3 style="color:var(--text-primary)">${esc(j.name)}</h3>${st}</div>
+      <div class="muted small" style="word-break:break-all;margin-top:-6px">${esc(j.url)}</div>
+      <div style="margin:10px 0;min-height:22px">${j.current ? `⏺ <b>${esc(j.current)}</b> <span class="muted">· ${fmtDur(Date.now() / 1000 - j.current_since)}</span>` : (j.error && j.state !== "off" ? `<span class="small" style="color:#ff8a8a">${esc(j.error)}</span>` : `<span class="muted">—</span>`)}</div>
+      <div class="muted small">${fmtN(j.count)} piese salvate · ${fmtBytes(j.size)}${j.since ? " · pornit de " + fmtDur(Date.now() / 1000 - j.since) : ""}${j.keep_days ? " · se păstrează " + j.keep_days + " zile" : ""}</div>
+      <div class="row" style="margin-top:12px">
+        ${j.state === "off" ? `<button class="btn sm primary" onclick="recAct(${j.id},'start')">⏺ Pornește</button>` : `<button class="btn sm" onclick="recAct(${j.id},'stop')">⏹ Oprește</button>`}
+        <button class="btn sm" onclick="recFiles(${j.id})">🎵 Piese</button>
+        <button class="btn sm" onclick="recLog(${j.id})">Jurnal</button>
+        <button class="btn sm" onclick="recEdit(${j.id})">Editează</button>
+        <button class="btn sm danger" onclick="recDel(${j.id})">Șterge</button></div></div>`;
+  }).join("") || `<div class="card empty" style="grid-column:1/-1">Nicio înregistrare încă.</div>`;
+  if (REC.sel && (!tick || Date.now() - REC.filesAt > 10000)) recFiles(REC.sel, true);
+}
+$("#rn-go").onclick = async () => {
+  const body = {name: $("#rn-name").value, url: $("#rn-url").value, min_sec: +$("#rn-min").value, offset_sec: +$("#rn-offset").value,
+    keep_days: +$("#rn-keep").value, ignore_list: $("#rn-ign").value, continuu: $("#rn-cont").checked ? 1 : 0};
+  try { await api("POST", "/api/admin/recordings", body); toast("Înregistrarea a pornit"); $("#rn-name").value = ""; loadRec(); } catch (e) { fail(e); }
+};
+async function recAct(id, action) { try { await api("PUT", `/api/admin/recordings/${id}`, {action}); setTimeout(loadRec, 500); } catch (e) { fail(e); } }
+async function recDel(id) {
+  const j = REC.data.jobs.find(x => x.id === id);
+  modal(`<h2>Șterge înregistrarea „${esc(j.name)}”</h2><p class="muted">Ce faci cu piesele deja salvate (${fmtN(j.count)}, ${fmtBytes(j.size)})?</p>
+    <div class="actions"><button class="btn" data-close>Anulează</button><button class="btn" id="d1">Păstrez fișierele</button><button class="btn danger" id="d2">Șterg tot</button></div>`,
+  (m, close) => {
+    const go = async files => { try { await api("DELETE", `/api/admin/recordings/${id}${files ? "?files=1" : ""}`); close(); if (REC.sel === id) { REC.sel = null; $("#rec-files").classList.add("hidden"); } loadRec(); } catch (e) { fail(e); } };
+    $("#d1", m).onclick = () => go(false); $("#d2", m).onclick = () => go(true);
+  });
+}
+function recEdit(id) {
+  const j = REC.data.jobs.find(x => x.id === id);
+  modal(`<h2>Editează – ${esc(j.name)}</h2><div class="grid g2">
+    <label class="f">Nume<input id="e-n" value="${esc(j.name)}"></label>
+    <label class="f">Adresa stream-ului<input id="e-u" value="${esc(j.url)}"></label>
+    <label class="f">Șterge piesele sub (secunde)<input id="e-min" type="number" value="${j.min_sec}"></label>
+    <label class="f">Decalaj tăiere (secunde)<input id="e-off" type="number" step="0.5" value="${j.offset_sec}"></label>
+    <label class="f">Păstrează fișierele (zile)<input id="e-k" type="number" value="${j.keep_days}"></label>
+    <label class="f">Ignoră titlurile care conțin<input id="e-i" value="${esc(j.ignore_list || "")}"></label>
+    <label class="chk"><input type="checkbox" id="e-c" ${j.continuu ? "checked" : ""}> Salvează și toată emisia</label></div>
+    <p class="muted small">Decalaj pozitiv = taie mai devreme (când începutul piesei noi ajunge la finalul celei vechi).</p>
+    <div class="actions"><button class="btn" data-close>Anulează</button><button class="btn primary" id="e-s">Salvează</button></div>`,
+  (m, close) => $("#e-s", m).onclick = async () => {
+    try { await api("PUT", `/api/admin/recordings/${id}`, {name: $("#e-n", m).value, url: $("#e-u", m).value, min_sec: +$("#e-min", m).value,
+      offset_sec: +$("#e-off", m).value, keep_days: +$("#e-k", m).value, ignore_list: $("#e-i", m).value, continuu: $("#e-c", m).checked ? 1 : 0});
+      close(); toast("Salvat"); loadRec(); } catch (e) { fail(e); }
+  });
+}
+async function recLog(id) {
+  const d = await api("GET", `/api/admin/recordings/${id}/log`);
+  modal(`<h2>Jurnal înregistrare</h2><div class="mono small" style="max-height:60vh;overflow:auto;white-space:pre-wrap;background:var(--surface-2);padding:10px;border-radius:8px">${esc(d.lines.join("\n")) || "—"}</div>
+    <div class="actions"><button class="btn primary" data-close>Închide</button></div>`, m => { const x = $(".mono", m); x.scrollTop = x.scrollHeight; });
+}
+async function recFiles(id, quiet) {
+  REC.sel = id; REC.filesAt = Date.now();
+  const j = REC.data && REC.data.jobs.find(x => x.id === id);
+  let d;
+  try { d = await api("GET", `/api/admin/recordings/${id}/files`); } catch (e) { return; }
+  const box = $("#rec-files");
+  box.classList.remove("hidden");
+  const flt = $("#rf-q") ? $("#rf-q").value : "";
+  const playing = $("#rf-audio") && !$("#rf-audio").paused ? {src: $("#rf-audio").src, t: $("#rf-audio").currentTime, name: $("#rf-now").textContent} : null;
+  if (quiet && playing) return;   // nu întrerupem redarea la reîmprospătare
+  box.innerHTML = `<div class="card-head"><h2>Piese – ${esc(j ? j.name : "")} <span class="muted">(${d.files.length})</span></h2><button class="btn sm" onclick="REC.sel=null;$('#rec-files').classList.add('hidden')">Închide</button></div>
+    <div class="row" style="margin-bottom:10px;flex-wrap:nowrap"><audio id="rf-audio" controls style="flex:1;height:40px"></audio></div>
+    <div class="muted small" id="rf-now" style="margin-bottom:8px">Apasă ▶ la o piesă ca s-o asculți.</div>
+    <input id="rf-q" placeholder="Caută..." value="${esc(flt)}" style="width:100%;margin-bottom:8px">
+    <div class="muted small" style="margin-bottom:6px">Folder pe server: <span class="mono">${esc(d.dir)}</span></div>
+    <div class="table-wrap" style="max-height:520px"><table><thead><tr><th>Piesă</th><th class="num">Durată</th><th class="num">Mărime</th><th>Data</th><th></th></tr></thead><tbody>
+    ${d.files.map(f => `<tr data-n="${esc(f.name.toLowerCase())}"><td style="word-break:break-all">${f.full ? "📼 " : ""}${esc(f.name.replace(/\.[^.]+$/, ""))}</td>
+      <td class="num">${esc(f.duration)}</td><td class="num muted">${fmtBytes(f.size)}</td><td class="nowrap muted small">${fmtDT(f.mtime)}</td>
+      <td class="right nowrap"><button class="btn sm" data-play="${esc(f.name)}">▶</button>
+      <a class="btn sm" href="/api/admin/recordings/${id}/file?dl=1&name=${encodeURIComponent(f.name)}">⬇</a>
+      <button class="btn sm danger" data-rm="${esc(f.name)}">✕</button></td></tr>`).join("") || `<tr><td colspan="5" class="empty">Nicio piesă salvată încă. Prima piesă (prinsă de la jumătate) nu se păstrează.</td></tr>`}
+    </tbody></table></div>`;
+  const filter = () => { const q = $("#rf-q").value.toLowerCase(); $$("tr[data-n]", box).forEach(r => r.classList.toggle("hidden", !r.dataset.n.includes(q))); };
+  $("#rf-q").oninput = filter; filter();
+  $$("[data-play]", box).forEach(b => b.onclick = () => {
+    const a = $("#rf-audio");
+    a.src = `/api/admin/recordings/${id}/file?name=${encodeURIComponent(b.dataset.play)}`;
+    a.play(); $("#rf-now").textContent = "▶ " + b.dataset.play;
+  });
+  $$("[data-rm]", box).forEach(b => b.onclick = async () => {
+    if (!await confirmBox(`Ștergi „${b.dataset.rm}”?`)) return;
+    try { await api("DELETE", `/api/admin/recordings/${id}/file?name=${encodeURIComponent(b.dataset.rm)}`); recFiles(id); } catch (e) { fail(e); }
+  });
+  if (!quiet) box.scrollIntoView({behavior: "smooth", block: "start"});
+}
+
 /* ================= ASCULTĂTORI ================= */
 async function loadListeners() {
   try { lisData = await api("GET", "/api/admin/listeners"); } catch (e) { return; }
@@ -741,7 +870,7 @@ $("#pw-save").onclick = async () => { try { await api("PUT", "/api/me/password",
   const me = await api("GET", "/api/me");
   $("#me").textContent = me.username;
   const h = location.hash.slice(1);
-  show(["dash", "stations", "autodj", "listeners", "users", "events", "settings"].includes(h) ? h : "dash");
+  show(["dash", "stations", "autodj", "rec", "listeners", "users", "events", "settings"].includes(h) ? h : "dash");
 })();
 </script>
 </body></html>
