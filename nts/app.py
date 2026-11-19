@@ -119,6 +119,8 @@ class Radio:
             n += 1
             for st in list(self.stations.values()):
                 st.tick_peak()
+            if n % 12 == 0:
+                self.flush_ban_hits()
             if n % 720 == 0:      # o dată pe oră
                 self.db.exec("DELETE FROM sessions WHERE last < ?", (now() - SESSION_TTL,))
                 self.recorder.cleanup()
@@ -192,27 +194,89 @@ class Radio:
             return not (p == "/api/public" or p.startswith("/api/public/"))
         return p in self.PANEL_PATHS or p.startswith("/report/")
 
+    # ---- IP-uri blocate (IP-uri exacte și rețele CIDR), cu cache în memorie ----
+    def _load_bans(self):
+        import ipaddress
+        exact, nets = {}, []
+        for r in self.db.all("SELECT ip, until FROM bans"):
+            if "/" in r["ip"]:
+                try:
+                    nets.append((ipaddress.ip_network(r["ip"], strict=False), r["until"], r["ip"]))
+                except ValueError:
+                    pass
+            else:
+                exact[r["ip"]] = r["until"]
+        self._bans = (exact, nets, time.time())
+
+    def bans_changed(self):
+        self._bans = None
+
+    def ban_key(self, ip):
+        b = getattr(self, "_bans", None)
+        if b is None or time.time() - b[2] > 300:
+            self._load_bans()
+            b = self._bans
+        exact, nets, _ = b
+        t = now()
+        if ip in exact and (not exact[ip] or exact[ip] > t):
+            return ip
+        if nets:
+            import ipaddress
+            try:
+                a = ipaddress.ip_address(ip)
+            except ValueError:
+                return None
+            for net, until, key in nets:
+                if a.version == net.version and a in net and (not until or until > t):
+                    return key
+        return None
+
     def is_banned(self, ip):
-        r = self.db.one("SELECT until FROM bans WHERE ip=?", (ip,))
-        return bool(r) and (not r["until"] or r["until"] > now())
+        k = self.ban_key(ip)
+        if k:
+            hits = getattr(self, "ban_hits", None)
+            if hits is None:
+                hits = self.ban_hits = {}
+            hits[k] = hits.get(k, 0) + 1
+            return True
+        return False
+
+    def flush_ban_hits(self):
+        hits = getattr(self, "ban_hits", None) or {}
+        self.ban_hits = {}
+        for k, n in hits.items():
+            self.db.exec("UPDATE bans SET hits=COALESCE(hits,0)+?, last_seen=? WHERE ip=?", (n, now(), k))
 
     # ---- protecție surse: blocare automată după încercări eșuate ----
-    SRC_MAX_FAILS = 5          # încercări greșite
-    SRC_WINDOW = 600           # în 10 minute
-    SRC_BLOCK = 86400          # -> blocat 24 h
+    SRC_WINDOW = 600           # fereastra de numărare: 10 minute
+
+    def autoban_cfg(self):
+        try:
+            attempts = max(1, int(self.db.get_setting("autoban_attempts", "5") or 5))
+        except ValueError:
+            attempts = 5
+        try:
+            hours = max(0, int(self.db.get_setting("autoban_hours", "0") or 0))   # 0 = permanent
+        except ValueError:
+            hours = 0
+        return attempts, hours
 
     def source_fail(self, ip, what):
+        attempts, hours = self.autoban_cfg()
         lst = [t for t in self.src_fails.get(ip, []) if time.time() - t < self.SRC_WINDOW]
         lst.append(time.time())
         self.src_fails[ip] = lst
-        if len(lst) >= self.SRC_MAX_FAILS:
+        if len(lst) >= attempts:
             self.src_fails.pop(ip, None)
             if ip in ("127.0.0.1", "::1"):
                 return
-            self.db.exec("INSERT OR REPLACE INTO bans(ip, reason, created, until) VALUES(?,?,?,?)",
-                         (ip, f"auto: {self.SRC_MAX_FAILS} încercări greșite ({what})", now(), now() + self.SRC_BLOCK))
-            self.db.event(None, "auto_ban", f"{ip} blocat 24h – {what}")
-            log(f"IP {ip} blocat automat 24h după {self.SRC_MAX_FAILS} încercări greșite ({what})", "warn")
+            until = now() + hours * 3600 if hours else 0
+            durata = f"{hours}h" if hours else "permanent"
+            self.db.exec("INSERT OR REPLACE INTO bans(ip, reason, created, until, hits, last_seen) VALUES(?,?,?,?,0,?)",
+                         (ip, f"auto: {attempts} încercări greșite ({what})", now(), until, now()))
+            self.bans_changed()
+            self.db.event(None, "auto_ban", f"{ip} blocat {durata} – {what}")
+            log(f"IP {ip} blocat automat ({durata}) după {attempts} încercări greșite ({what})", "warn")
         elif len(lst) == 1:
             log(f"{what} respinsă de la {ip}", "warn")
 
@@ -1106,8 +1170,9 @@ class Radio:
                     l = h.listeners.get(lid)
                     if l:
                         if seg[2] == "ban":
-                            self.db.exec("INSERT OR REPLACE INTO bans(ip, reason, created) VALUES(?,?,?)",
-                                         (l.ip, "ban manual", now()))
+                            self.db.exec("INSERT OR REPLACE INTO bans(ip, reason, created, until, hits, last_seen) "
+                                         "VALUES(?,?,?,0,0,?)", (l.ip, "ban manual (ascultător)", now(), now()))
+                            self.bans_changed()
                             for h2 in st.hubs.values():
                                 for l2 in list(h2.listeners.values()):
                                     if l2.ip == l.ip:
@@ -1115,19 +1180,55 @@ class Radio:
                         l.close()
                         return await send_json(w, {"ok": True})
             raise HTTPError(404, "Ascultătorul nu mai e conectat")
+        if seg == ["bans", "settings"] and m == "PUT":
+            d = await req.json()
+            self.db.set_setting("autoban_attempts", max(1, min(50, int(d.get("attempts") or 5))))
+            hours = max(0, int(d.get("hours") or 0))
+            self.db.set_setting("autoban_hours", hours)
+            if d.get("make_permanent"):
+                self.db.exec("UPDATE bans SET until=0 WHERE until>0")
+                self.bans_changed()
+            return await send_json(w, {"ok": True})
         if seg == ["bans"]:
             if m == "GET":
+                self.flush_ban_hits()
                 self.db.exec("DELETE FROM bans WHERE until > 0 AND until < ?", (now(),))
-                return await send_json(w, self.db.all("SELECT * FROM bans ORDER BY created DESC"))
+                rows = self.db.all("SELECT * FROM bans ORDER BY created DESC")
+                for r in rows:
+                    r["country"] = self.geo.country(r["ip"].split("/")[0]) if "/" not in r["ip"] else ""
+                attempts, hours = self.autoban_cfg()
+                return await send_json(w, {"bans": rows, "attempts": attempts, "hours": hours})
             d = await req.json()
-            ip = (d.get("ip") or "").strip()
-            if not ip:
-                raise HTTPError(400, "IP lipsă")
             if m == "POST":
-                self.db.exec("INSERT OR REPLACE INTO bans(ip, reason, created) VALUES(?,?,?)",
-                             (ip, d.get("reason", ""), now()))
+                import ipaddress
+                ip = (d.get("ip") or "").strip()
+                try:
+                    if "/" in ip:
+                        net = ipaddress.ip_network(ip, strict=False)
+                        if net.prefixlen < (8 if net.version == 4 else 32):
+                            raise HTTPError(400, "Rețea prea mare (minim /8 la IPv4)")
+                        ip = str(net)
+                    else:
+                        ip = str(ipaddress.ip_address(ip))
+                except ValueError:
+                    raise HTTPError(400, "IP sau rețea invalidă (ex: 1.2.3.4 sau 1.2.3.0/24)")
+                if ip in ("127.0.0.1", "::1") or ip.startswith("127."):
+                    raise HTTPError(400, "Nu poți bloca adresa locală")
+                self.db.exec("INSERT OR REPLACE INTO bans(ip, reason, created, until, hits, last_seen) "
+                             "VALUES(?,?,?,0,0,?)", (ip, (d.get("reason") or "manual")[:200], now(), now()))
+                # deconectează ascultătorii din IP-ul / rețeaua blocată
+                self.bans_changed()
+                for st in self.stations.values():
+                    for h in st.hubs.values():
+                        for l in list(h.listeners.values()):
+                            if self.ban_key(l.ip):
+                                l.close()
             elif m == "DELETE":
-                self.db.exec("DELETE FROM bans WHERE ip=?", (ip,))
+                ips = d.get("ips") or [d.get("ip")]
+                for ip in ips:
+                    if ip:
+                        self.db.exec("DELETE FROM bans WHERE ip=?", (ip,))
+                self.bans_changed()
             return await send_json(w, {"ok": True})
         if seg == ["users"]:
             if m == "GET":

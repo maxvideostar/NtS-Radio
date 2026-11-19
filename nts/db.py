@@ -71,6 +71,11 @@ class DB:
         bcols = {r[1] for r in self.conn.execute("PRAGMA table_info(bans)")}
         if "until" not in bcols:
             self.conn.execute("ALTER TABLE bans ADD COLUMN until INTEGER DEFAULT 0")
+        if "hits" not in bcols:
+            self.conn.execute("ALTER TABLE bans ADD COLUMN hits INTEGER DEFAULT 0")
+            self.conn.execute("ALTER TABLE bans ADD COLUMN last_seen INTEGER DEFAULT 0")
+            # trecerea la blocare permanentă: blocările automate active devin permanente
+            self.conn.execute("UPDATE bans SET until=0 WHERE until>0 AND reason LIKE 'auto:%'")
 
     def exec(self, sql, args=()):
         with self.lock:

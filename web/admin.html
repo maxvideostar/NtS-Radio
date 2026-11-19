@@ -37,6 +37,7 @@
     <button data-t="autodj">AutoDJ</button>
     <button data-t="rec">Înregistrări</button>
     <button data-t="listeners">Ascultători</button>
+    <button data-t="bans">IP-uri blocate</button>
     <button data-t="users">Utilizatori</button>
     <button data-t="events">Evenimente</button>
     <button data-t="settings">Setări</button>
@@ -107,10 +108,27 @@
       <input id="lis-filter" placeholder="Caută IP, țară, player..." style="max-width:260px"></div>
       <div class="table-wrap"><table><thead><tr><th>Post / mount</th><th>IP</th><th>Țară</th><th>Dispozitiv / player</th><th class="num">Durată</th><th class="num">Trimis</th><th></th></tr></thead><tbody id="lis-list"></tbody></table></div>
     </div>
-    <div class="card" style="margin-top:14px"><div class="card-head"><h3>IP-uri blocate</h3>
-      <div class="row"><input id="ban-ip" placeholder="IP"><input id="ban-reason" placeholder="Motiv (opțional)"><button class="btn" id="ban-add">Blochează</button></div></div>
-      <p class="muted small">IP-urile care greșesc de 5 ori parola sursei în 10 minute (scanere, roboți) sunt blocate automat 24 de ore.</p>
-      <table><thead><tr><th>IP</th><th>Motiv</th><th>Data</th><th>Expiră</th><th></th></tr></thead><tbody id="ban-list"></tbody></table>
+  </section>
+
+  <section id="t-bans" class="hidden">
+    <div class="grid g2" style="margin-bottom:14px">
+      <div class="card"><h2>Blocare automată</h2>
+        <p class="muted small" style="margin-top:-6px">Se aplică IP-urilor care greșesc parola sursei (studio) sau scanează porturile: roboți, scanere de servere SHOUTcast/Icecast.</p>
+        <div class="grid g2">
+          <label class="f">Blochează după (încercări greșite în 10 minute)<input id="ab-att" type="number" min="1" max="50"></label>
+          <label class="f">Durata blocării<select id="ab-hours"><option value="0">Permanent</option><option value="24">24 de ore</option><option value="168">7 zile</option><option value="720">30 de zile</option></select></label>
+        </div>
+        <div class="row" style="margin-top:12px"><button class="btn primary" id="ab-save">Salvează</button><button class="btn" id="ab-perm" title="Toate blocările temporare devin permanente">Fă toate blocările permanente</button></div>
+      </div>
+      <div class="card"><h2>Blochează manual</h2>
+        <p class="muted small" style="margin-top:-6px">Un IP (ex: <span class="mono">35.210.13.235</span>) sau o rețea întreagă (ex: <span class="mono">35.210.0.0/16</span>). Blocarea manuală e permanentă.</p>
+        <div class="grid g2"><label class="f">IP sau rețea<input id="ban-ip" placeholder="1.2.3.4 sau 1.2.3.0/24"></label><label class="f">Motiv<input id="ban-reason" placeholder="opțional"></label></div>
+        <div class="row" style="margin-top:12px"><button class="btn primary" id="ban-add">Blochează</button><div class="spacer"></div><button class="btn" id="ban-ufw" title="comenzi pentru firewall-ul serverului (ufw)">Comenzi firewall (ufw)</button></div>
+      </div>
+    </div>
+    <div class="card"><div class="card-head"><h2>IP-uri blocate <span class="muted" id="ban-count"></span></h2>
+      <div class="row"><input id="ban-q" placeholder="Caută IP, țară, motiv..." style="max-width:260px"><button class="btn sm danger" id="ban-bulk" disabled>Deblochează selectate</button></div></div>
+      <div class="table-wrap" style="max-height:640px"><table><thead><tr><th><input type="checkbox" id="ban-all"></th><th>IP / rețea</th><th>Țară</th><th>Motiv</th><th>Blocat la</th><th>Expiră</th><th class="num" title="conexiuni respinse de la blocare">Încercări blocate</th><th>Ultima încercare</th><th></th></tr></thead><tbody id="ban-list"></tbody></table></div>
     </div>
   </section>
 
@@ -176,11 +194,12 @@ function show(t) {
   location.hash = t;
   clearInterval(timer); timer = null;
   ({dash: loadDash, stations: loadStations, autodj: loadAutodj, listeners: loadListeners, users: loadUsers,
-    events: loadEvents, settings: loadSettings, rec: loadRec})[t]();
+    events: loadEvents, settings: loadSettings, rec: loadRec, bans: () => loadBans()})[t]();
   if (t === "dash") timer = setInterval(loadDash, 2000);
   if (t === "listeners") timer = setInterval(loadListeners, 5000);
   if (t === "autodj") timer = setInterval(refreshAdjNow, 3000);
   if (t === "rec") timer = setInterval(() => loadRec(true), 3000);
+  if (t === "bans") timer = setInterval(() => loadBans(true), 15000);
 }
 $("#logout").onclick = async () => { await api("POST", "/api/logout"); location.href = "/login"; };
 
@@ -776,7 +795,6 @@ async function recFiles(id, quiet) {
 async function loadListeners() {
   try { lisData = await api("GET", "/api/admin/listeners"); } catch (e) { return; }
   renderListeners();
-  if (!STATE.bansLoaded) { STATE.bansLoaded = true; loadBans(); }
 }
 $("#lis-filter").oninput = renderListeners;
 function renderListeners() {
@@ -792,13 +810,62 @@ function renderListeners() {
     <td class="right nowrap"><button class="btn sm" onclick="kick(${l.id})">Kick</button> <button class="btn sm danger" onclick="ban(${l.id})">Ban</button></td></tr>`).join("") || `<tr><td colspan="7" class="empty">Niciun ascultător conectat.</td></tr>`;
 }
 async function kick(id) { try { await api("POST", `/api/admin/listeners/${id}/kick`); loadListeners(); } catch (e) { fail(e); } }
-async function ban(id) { if (await confirmBox("Blochezi IP-ul acestui ascultător?")) try { await api("POST", `/api/admin/listeners/${id}/ban`); loadListeners(); loadBans(); } catch (e) { fail(e); } }
-async function loadBans() {
-  const b = await api("GET", "/api/admin/bans");
-  $("#ban-list").innerHTML = b.map(x => `<tr><td class="mono">${esc(x.ip)}</td><td>${esc(x.reason)}</td><td>${fmtDT(x.created)}</td><td>${x.until ? fmtDT(x.until) : '<span class="muted">permanent</span>'}</td><td class="right"><button class="btn sm" onclick="unban('${esc(x.ip)}')">Deblochează</button></td></tr>`).join("") || `<tr><td colspan="5" class="muted">Niciun IP blocat.</td></tr>`;
+async function ban(id) { if (await confirmBox("Blochezi IP-ul acestui ascultător?")) try { await api("POST", `/api/admin/listeners/${id}/ban`); loadListeners(); } catch (e) { fail(e); } }
+/* ================= IP-URI BLOCATE ================= */
+let BANS = [];
+async function loadBans(keepInputs) {
+  let d;
+  try { d = await api("GET", "/api/admin/bans"); } catch (e) { return; }
+  BANS = d.bans;
+  if (!keepInputs) { $("#ab-att").value = d.attempts; $("#ab-hours").value = String(d.hours); }
+  renderBans();
 }
-$("#ban-add").onclick = async () => { try { await api("POST", "/api/admin/bans", {ip: $("#ban-ip").value, reason: $("#ban-reason").value}); $("#ban-ip").value = ""; loadBans(); } catch (e) { fail(e); } };
-async function unban(ip) { try { await api("DELETE", "/api/admin/bans", {ip}); loadBans(); } catch (e) { fail(e); } }
+function renderBans() {
+  const q = ($("#ban-q").value || "").toLowerCase();
+  const sel = new Set($$("#ban-list input[data-ip]:checked").map(x => x.dataset.ip));
+  const rows = BANS.filter(b => !q || [b.ip, b.reason, b.country, countryName(b.country)].join(" ").toLowerCase().includes(q));
+  $("#ban-count").textContent = `(${BANS.length})`;
+  $("#ban-list").innerHTML = rows.map(b => {
+    const net = b.ip.includes("/");
+    const p = b.ip.split(".");
+    const net24 = !net && p.length === 4 ? `${p[0]}.${p[1]}.${p[2]}.0/24` : "";
+    return `<tr><td><input type="checkbox" data-ip="${esc(b.ip)}"${sel.has(b.ip) ? " checked" : ""}></td>
+      <td class="mono">${esc(b.ip)}${net ? ' <span class="badge relay">rețea</span>' : ""}</td>
+      <td class="nowrap">${net ? "—" : `${flag(b.country)} ${esc(countryName(b.country))}`}</td>
+      <td class="small">${esc(b.reason || "")}</td>
+      <td class="nowrap small">${fmtDT(b.created)}</td>
+      <td class="nowrap small">${b.until ? fmtDT(b.until) : '<span class="badge err">permanent</span>'}</td>
+      <td class="num">${fmtN(b.hits || 0)}</td>
+      <td class="nowrap small muted">${b.last_seen && b.hits ? fmtDT(b.last_seen) : "—"}</td>
+      <td class="right nowrap">${net24 && !BANS.some(x => x.ip === net24) ? `<button class="btn sm" data-net="${net24}" title="blochează toată rețeaua ${net24}">Blochează /24</button> ` : ""}<button class="btn sm" data-unban="${esc(b.ip)}">Deblochează</button></td></tr>`;
+  }).join("") || `<tr><td colspan="9" class="empty">Niciun IP blocat.</td></tr>`;
+  $$("[data-unban]").forEach(x => x.onclick = () => unban([x.dataset.unban]));
+  $$("[data-net]").forEach(x => x.onclick = async () => {
+    if (!await confirmBox(`Blochezi toată rețeaua ${x.dataset.net} (256 de adrese)?`)) return;
+    try { await api("POST", "/api/admin/bans", {ip: x.dataset.net, reason: "rețea blocată manual"}); loadBans(true); } catch (e) { fail(e); }
+  });
+  const upd = () => { $("#ban-bulk").disabled = !$$("#ban-list input[data-ip]:checked").length; };
+  $$("#ban-list input[data-ip]").forEach(x => x.onchange = upd); upd();
+}
+$("#ban-q").oninput = renderBans;
+$("#ban-all").onchange = e => { $$("#ban-list input[data-ip]").forEach(x => x.checked = e.target.checked); $("#ban-bulk").disabled = !e.target.checked; };
+$("#ban-bulk").onclick = async () => {
+  const ips = $$("#ban-list input[data-ip]:checked").map(x => x.dataset.ip);
+  if (ips.length && await confirmBox(`Deblochezi ${ips.length} IP-uri?`)) unban(ips);
+};
+$("#ban-add").onclick = async () => { try { await api("POST", "/api/admin/bans", {ip: $("#ban-ip").value, reason: $("#ban-reason").value}); $("#ban-ip").value = ""; $("#ban-reason").value = ""; toast("Blocat"); loadBans(true); } catch (e) { fail(e); } };
+async function unban(ips) { try { await api("DELETE", "/api/admin/bans", {ips}); loadBans(true); } catch (e) { fail(e); } }
+$("#ab-save").onclick = async () => { try { await api("PUT", "/api/admin/bans/settings", {attempts: +$("#ab-att").value, hours: +$("#ab-hours").value}); toast("Salvat"); } catch (e) { fail(e); } };
+$("#ab-perm").onclick = async () => {
+  if (!await confirmBox("Toate blocările temporare devin permanente. Continui?")) return;
+  try { await api("PUT", "/api/admin/bans/settings", {attempts: +$("#ab-att").value, hours: +$("#ab-hours").value, make_permanent: 1}); toast("Gata"); loadBans(true); } catch (e) { fail(e); }
+};
+$("#ban-ufw").onclick = () => {
+  const cmds = BANS.map(b => `ufw insert 1 deny from ${b.ip}`).join("\n");
+  modal(`<h2>Comenzi firewall (ufw)</h2><p class="muted small">Opțional: blochează aceste IP-uri direct în firewall-ul serverului, pentru toate porturile și serviciile (SSH, nginx etc.). Rulează ca root pe server.</p>
+    <pre class="card mono small" style="max-height:50vh;overflow:auto;white-space:pre-wrap">${esc(cmds || "# niciun IP blocat")}</pre>
+    <div class="actions"><button class="btn" id="cp">Copiază</button><button class="btn primary" data-close>Închide</button></div>`, m => $("#cp", m).onclick = () => copyText(cmds));
+};
 
 /* ================= UTILIZATORI ================= */
 async function loadUsers() {
@@ -870,7 +937,7 @@ $("#pw-save").onclick = async () => { try { await api("PUT", "/api/me/password",
   const me = await api("GET", "/api/me");
   $("#me").textContent = me.username;
   const h = location.hash.slice(1);
-  show(["dash", "stations", "autodj", "rec", "listeners", "users", "events", "settings"].includes(h) ? h : "dash");
+  show(["dash", "stations", "autodj", "rec", "listeners", "bans", "users", "events", "settings"].includes(h) ? h : "dash");
 })();
 </script>
 </body></html>
