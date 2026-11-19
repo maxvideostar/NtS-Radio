@@ -12,6 +12,7 @@ import collections
 import json
 import os
 import random
+import re
 import shutil
 import time
 from array import array
@@ -205,6 +206,81 @@ class Hub:
         self.bytes_out += len(data) * len(self.listeners)
 
 
+# ======================================================================
+#  Procesare audio (AGC + compresor + limitator) – filtru ffmpeg în encoder
+# ======================================================================
+PROC_PRESETS = {
+    "off":    None,
+    "light":  {"agc": False, "agc_target": -16, "agc_max": 12, "comp_thr": -20, "comp_ratio": 2, "attack": 20,
+               "release": 300, "makeup": 3, "ceiling": -1.0},
+    "medium": {"agc": True, "agc_target": -16, "agc_max": 12, "comp_thr": -18, "comp_ratio": 3, "attack": 10,
+               "release": 200, "makeup": 3, "ceiling": -1.0},
+    "strong": {"agc": True, "agc_target": -14, "agc_max": 18, "comp_thr": -16, "comp_ratio": 5, "attack": 5,
+               "release": 120, "makeup": 4, "ceiling": -1.0},
+}
+_LIMITER_HAS_LEVEL = None
+
+
+def limiter_has_level():
+    global _LIMITER_HAS_LEVEL
+    if _LIMITER_HAS_LEVEL is None:
+        try:
+            import subprocess
+            out = subprocess.run([FFMPEG, "-hide_banner", "-h", "filter=alimiter"], capture_output=True,
+                                 text=True, timeout=10).stdout
+            _LIMITER_HAS_LEVEL = bool(re.search(r"^\s+level\s", out, re.M))
+        except Exception:
+            _LIMITER_HAS_LEVEL = False
+    return _LIMITER_HAS_LEVEL
+
+
+def _clamp(v, lo, hi, d):
+    try:
+        return max(lo, min(hi, float(v)))
+    except (TypeError, ValueError):
+        return d
+
+
+def proc_normalize(d):
+    d = d or {}
+    mode = d.get("mode") if d.get("mode") in ("off", "light", "medium", "strong", "custom") else "off"
+    base = dict(PROC_PRESETS["medium"])
+    if mode in ("light", "medium", "strong"):
+        base = dict(PROC_PRESETS[mode])
+    elif mode == "custom":
+        base.update({
+            "agc": bool(d.get("agc")),
+            "agc_target": _clamp(d.get("agc_target"), -24, -8, -16),
+            "agc_max": _clamp(d.get("agc_max"), 0, 30, 12),
+            "comp_thr": _clamp(d.get("comp_thr"), -40, -3, -18),
+            "comp_ratio": _clamp(d.get("comp_ratio"), 1, 20, 3),
+            "attack": _clamp(d.get("attack"), 0.1, 200, 10),
+            "release": _clamp(d.get("release"), 20, 2000, 200),
+            "makeup": _clamp(d.get("makeup"), 0, 18, 3),
+            "ceiling": _clamp(d.get("ceiling"), -6, 0, -1),
+        })
+    base["mode"] = mode
+    return base
+
+
+def proc_filter(d):
+    """întoarce lanțul de filtre ffmpeg sau None"""
+    d = proc_normalize(d)
+    if d["mode"] == "off":
+        return None
+    f = []
+    if d["agc"]:   # AGC: ridică piesele încete, coboară pe cele tari (întârziere ~1.5 s)
+        f.append(f"dynaudnorm=f=200:g=15:p=0.9:m={10 ** (d['agc_max'] / 20):.2f}:"
+                 f"r={10 ** (d['agc_target'] / 20):.3f}")
+    f.append(f"acompressor=threshold={d['comp_thr']}dB:ratio={d['comp_ratio']}:attack={d['attack']}:"
+             f"release={d['release']}:makeup={max(0.0, d['makeup']):.1f}dB:knee=4")
+    lim = f"alimiter=limit={d['ceiling']}dB:attack=5:release=50"
+    if limiter_has_level():
+        lim += ":level=0"
+    f.append(lim)
+    return ",".join(f)
+
+
 class Encoder:
     def __init__(self, station, hub):
         self.station = station
@@ -216,6 +292,9 @@ class Encoder:
     async def start(self):
         args = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error",
                 "-f", "s16le", "-ar", str(SR), "-ac", str(CH), "-i", "pipe:0"]
+        af = proc_filter(self.station.proc)
+        if af:
+            args += ["-af", af]
         if self.hub.codec == "mp3":
             args += ["-c:a", "libmp3lame", "-b:a", f"{self.hub.bitrate}k", "-write_xing", "0", "-f", "mp3"]
         else:
@@ -249,6 +328,15 @@ class Encoder:
             await asyncio.wait_for(p.stdin.drain(), 2)
         except Exception:
             await kill_proc(p)
+
+    async def restart(self):
+        """repornire fără gol: procesul vechi e înlocuit, nu lăsat None (mixerul scrie în paralel)"""
+        old_p, old_t = self.proc, self.task
+        if old_t:
+            old_t.cancel()
+        await self.start()
+        if old_p:
+            await kill_proc(old_p)
 
     async def stop(self):
         if self.proc:
@@ -836,6 +924,20 @@ class Station:
         self.relay_status = {"state": "off"}
         self.relay_task = None
         self.pushes = []
+        self.proc = self.load_proc()
+
+    def load_proc(self):
+        try:
+            return proc_normalize(json.loads(self.radio.db.get_setting(f"proc:{self.id}", "") or "{}"))
+        except Exception:
+            return proc_normalize({})
+
+    async def set_proc(self, d):
+        """aplică procesarea nouă: encoderele repornesc pe rând, ascultătorii rămân conectați"""
+        self.proc = proc_normalize(d)
+        for e in list(self.encoders):
+            await e.restart()
+        log(f"procesare audio: {self.proc['mode']}", "info", self.slug)
 
     @property
     def slug(self):

@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 from . import VERSION, stats
 from .db import DB, DEFAULT_OUTPUTS
-from .engine import Station, LiveInput, Listener
+from .engine import Station, LiveInput, Listener, proc_normalize, proc_filter, PROC_PRESETS
 from .geo import Geo
 from .httpd import HTTPError, Server, send, send_json, send_file, ChunkedReader
 from .util import LOG, log, now, hash_password, check_password, gen_password, slugify, safe_filename, decode_text
@@ -1044,7 +1044,12 @@ class Radio:
                                        "server": self.server_info(), "version": VERSION})
         if seg == ["stations"]:
             if m == "GET":
-                return await send_json(w, self.db.stations())
+                rows = self.db.stations()
+                for r in rows:
+                    st_ = self.stations.get(r["id"])
+                    r["proc_mode"] = (st_.proc if st_ else proc_normalize(
+                        json.loads(self.db.get_setting(f"proc:{r['id']}", "") or "{}")))["mode"]
+                return await send_json(w, rows)
             if m == "POST":
                 d = self.station_payload(await req.json())
                 sid = self.db.exec(
@@ -1107,6 +1112,17 @@ class Radio:
                 if cfg["enabled"]:
                     await self.start_station(cfg)
                 return await send_json(w, {"ok": True})
+            if rest == ["processing"]:
+                if m == "PUT":
+                    pr = proc_normalize(await req.json())
+                    self.db.set_setting(f"proc:{sid}", json.dumps(pr))
+                    if st:
+                        await st.set_proc(pr)
+                    self.db.event(sid, "config", f"procesare audio: {pr['mode']}")
+                    return await send_json(w, {"ok": True, "processing": pr})
+                pr = st.proc if st else proc_normalize(json.loads(self.db.get_setting(f"proc:{sid}", "") or "{}"))
+                return await send_json(w, {"processing": pr, "filter": proc_filter(pr) or "",
+                                           "presets": {k: v for k, v in PROC_PRESETS.items() if v}})
             if rest == ["skip"] and m == "POST":
                 if st:
                     await st.autodj.skip()

@@ -263,13 +263,64 @@ async function loadStations() {
     <td class="mono">/${esc(s.slug)}</td>
     <td class="small">${s.outputs.map(o => `${o.codec.toUpperCase()} ${o.bitrate}k <span class="muted">/${esc(s.slug + o.mount)}</span>`).join("<br>")}</td>
     <td>${s.enabled ? '<span class="badge ok">activ</span>' : '<span class="badge off">oprit</span>'}</td>
-    <td class="small">studio${s.relay && s.relay.enabled ? " · relay" : ""}${s.autodj ? " · AutoDJ" : ""}${s.pushes && s.pushes.length ? `<div class="muted">${s.pushes.length} retransmisi${s.pushes.length === 1 ? "e" : "i"}</div>` : ""}</td>
+    <td class="small">studio${s.relay && s.relay.enabled ? " · relay" : ""}${s.autodj ? " · AutoDJ" : ""}${s.proc_mode && s.proc_mode !== "off" ? ` <span class="badge ok" title="Procesare audio">🎚 ${PROC_NAMES[s.proc_mode]}</span>` : ""}${s.pushes && s.pushes.length ? `<div class="muted">${s.pushes.length} retransmisi${s.pushes.length === 1 ? "e" : "i"}</div>` : ""}</td>
     <td class="right nowrap"><button class="btn sm" onclick="studioInfo(${s.id})">Date studio</button>
       <button class="btn sm" onclick="editStation(${s.id})">Editează</button>
+      <button class="btn sm" onclick="procEdit(${s.id})">🎚 Procesare</button>
       <button class="btn sm" onclick="restartSt(${s.id})">Repornește</button>
       <button class="btn sm danger" onclick="delStation(${s.id})">Șterge</button></td></tr>`).join("");
 }
 $("#addSt").onclick = () => editStation(null);
+/* ---------- procesare audio (compresor) ---------- */
+const PROC_NAMES = {off: "oprit", light: "ușor", medium: "mediu", strong: "puternic", custom: "personalizat"};
+const PROC_DESC = {
+  off: "Semnalul trece neprocesat.",
+  light: "Compresie fină + limitator. Păstrează dinamica, doar previne vârfurile și diferențele mari.",
+  medium: "AGC (ridică piesele încete, coboară pe cele tari, egalizează studio/AutoDJ) + compresor + limitator. Recomandat.",
+  strong: "Sunet „dens”, tare, stil FM comercial. Volum constant, dinamică redusă.",
+  custom: "Setezi tu fiecare parametru."};
+const PROC_FIELDS = [
+  ["agc_target", "AGC – nivel țintă (dBFS RMS)", -24, -8, 1], ["agc_max", "AGC – amplificare maximă (dB)", 0, 30, 1],
+  ["comp_thr", "Compresor – prag (dB)", -40, -3, 1], ["comp_ratio", "Compresor – raport", 1, 20, 0.5],
+  ["attack", "Atac (ms)", 0.1, 200, 0.1], ["release", "Eliberare (ms)", 20, 2000, 10],
+  ["makeup", "Câștig (makeup, dB)", 0, 18, 0.5], ["ceiling", "Limitator – plafon (dBFS)", -6, 0, 0.1]];
+async function procEdit(id) {
+  const s = STATIONS.find(x => x.id === id);
+  let r;
+  try { r = await api("GET", `/api/admin/stations/${id}/processing`); } catch (e) { return fail(e); }
+  const p = r.processing;
+  modal(`<h2>🎚 Procesare audio – ${esc(s.name)}</h2>
+    <p class="muted small">Compresor + limitator aplicate pe tot ce iese în eter (studio, relay, AutoDJ), pe toate mounturile și retransmisiile. Ascultătorii rămân conectați la schimbare.</p>
+    <div class="proc-modes">${Object.keys(PROC_NAMES).map(k => `<label class="proc-mode"><input type="radio" name="pm" value="${k}" ${p.mode === k ? "checked" : ""}><b>${PROC_NAMES[k]}</b><span class="muted small">${PROC_DESC[k]}</span></label>`).join("")}</div>
+    <div id="pcust" style="margin-top:12px">
+      <label class="chk"><input type="checkbox" id="p_agc" ${p.agc ? "checked" : ""}> AGC – egalizare automată a volumului între piese și surse</label>
+      <div class="grid2">${PROC_FIELDS.map(([k, l, mn, mx, st]) => `<label>${l} <b id="v_${k}">${p[k]}</b>
+        <input type="range" id="p_${k}" min="${mn}" max="${mx}" step="${st}" value="${p[k]}" oninput="$('#v_${k}').textContent=this.value"></label>`).join("")}</div>
+    </div>
+    <details class="small muted" style="margin-top:10px"><summary>Filtru ffmpeg</summary><code class="mono" id="pfilt" style="word-break:break-all">${esc(r.filter || "—")}</code></details>
+    <div class="actions"><button class="btn" data-close>Închide</button><button class="btn primary" id="pSave">Aplică</button></div>`,
+  (m, close) => {
+    const sync = () => {
+      const mode = $("input[name=pm]:checked", m).value;
+      const src = mode === "custom" ? null : (r.presets[mode] || null);
+      if (src) { $("#p_agc", m).checked = src.agc; PROC_FIELDS.forEach(([k]) => { $("#p_" + k, m).value = src[k]; $("#v_" + k, m).textContent = src[k]; }); }
+      $("#pcust", m).style.display = mode === "off" ? "none" : "";
+      $$("#pcust input", m).forEach(i => i.disabled = mode !== "custom");
+    };
+    $$("input[name=pm]", m).forEach(i => i.onchange = sync);
+    sync();
+    $("#pSave", m).onclick = async () => {
+      const d = {mode: $("input[name=pm]:checked", m).value, agc: $("#p_agc", m).checked};
+      PROC_FIELDS.forEach(([k]) => d[k] = parseFloat($("#p_" + k, m).value));
+      try {
+        await api("PUT", `/api/admin/stations/${id}/processing`, d);
+        const x = await api("GET", `/api/admin/stations/${id}/processing`);
+        $("#pfilt", m).textContent = x.filter || "—";
+        toast("Procesare aplicată: " + PROC_NAMES[d.mode]); loadStations();
+      } catch (e) { fail(e); }
+    };
+  });
+}
 async function restartSt(id) { try { await api("POST", `/api/admin/stations/${id}/restart`); toast("Post repornit"); } catch (e) { fail(e); } }
 async function delStation(id) {
   const s = STATIONS.find(x => x.id === id);

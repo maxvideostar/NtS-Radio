@@ -107,3 +107,10 @@ label.chk{display:flex;gap:8px;align-items:center;color:var(--text-secondary);cu
 .chart .tip b{font-variant-numeric:tabular-nums}
 .empty{color:var(--text-muted);padding:24px;text-align:center}
 .footer{color:var(--text-muted);font-size:11px;text-align:center;padding:20px}
+.proc-modes{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px}
+.proc-mode{display:flex;flex-direction:column;gap:4px;border:1px solid var(--border,#333);border-radius:10px;padding:10px;cursor:pointer}
+.proc-mode:has(input:checked){border-color:var(--accent,#4f8cff);background:rgba(79,140,255,.08)}
+.proc-mode input{display:none}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-top:8px}
+.grid2 input[type=range]{width:100%}
+@media(max-width:600px){.grid2{grid-template-columns:1fr}}
