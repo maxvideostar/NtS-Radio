@@ -785,7 +785,11 @@ class Radio:
                 "streams": [{"url": base + h.mount, "codec": h.codec, "bitrate": h.bitrate} for h in st.hubs.values()],
                 "history": rows[1:] if rows and rows[0]["title"] == st.title else rows[:10],
                 "jingle": st.jingle_playing, "jingle_image": f"{base}/jingle-image/{st.slug}",
-                "intro_secs": st.intro_seconds()}
+                "intro_secs": st.intro_seconds(),
+                "jingle_image_default": not (os.path.isfile(os.path.join(self.data_dir, "stations", st.slug, "jingle-image"))
+                                             or os.path.isfile(os.path.join(self.data_dir, "jingle-image"))),
+                "logo_default": not os.path.isfile(os.path.join(self.data_dir, "stations", st.slug, "logo")),
+                "viz_bg": f"{base}/static/jingle-logo-bg.png"}
 
     def period_args(self, req):
         q = req.query

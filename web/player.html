@@ -11,6 +11,7 @@ body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;b
 .head img{width:52px;height:52px;border-radius:12px;object-fit:cover;background:#222}
 .head h1{font-size:20px;margin:0}.head p{margin:2px 0 0;color:var(--muted);font-size:13px}
 .player{background:rgba(24,27,34,.85);backdrop-filter:blur(10px);border-radius:20px;padding:22px;box-shadow:0 20px 50px rgba(0,0,0,.4)}
+.cwrap{position:relative}.cwrap canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:0;transition:opacity .3s;border-radius:14px}
 .cover{width:100%;aspect-ratio:1;border-radius:14px;object-fit:cover;background:#222;display:block}
 .np{margin:18px 0 6px;font-size:19px;font-weight:650;line-height:1.3;min-height:50px;word-break:break-word}
 .status{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px}
@@ -33,7 +34,7 @@ body.embed{background:transparent;min-height:0}
 body.embed .wrap{padding:0;max-width:none}
 body.embed .head,body.embed .hist,body.embed .links,body.embed .bgart{display:none}
 body.embed .player{display:grid;grid-template-columns:88px 1fr auto;gap:14px;align-items:center;padding:14px;border-radius:14px;background:#181b22}
-body.embed .cover{width:88px;height:88px}
+body.embed .cover,body.embed .cwrap{width:88px;height:88px}
 body.embed .np{margin:0 0 4px;font-size:15px;min-height:0}
 body.embed .controls{margin:0}
 body.embed .vol{display:none}
@@ -44,7 +45,7 @@ body.embed .ename{display:block!important;font-size:12px;color:var(--muted);marg
 <div class="wrap">
   <div class="head"><img id="logo" alt=""><div><h1 id="name"></h1><p id="genre"></p></div></div>
   <div class="player">
-    <img class="cover" id="cover" alt="">
+    <div class="cwrap"><img class="cover" id="cover" alt=""><canvas id="viz"></canvas></div>
     <div>
       <div class="ename" id="ename" style="display:none"></div>
       <div class="np" id="np">Se încarcă...</div>
@@ -58,7 +59,8 @@ body.embed .ename{display:block!important;font-size:12px;color:var(--muted);marg
   <div class="hist" id="histbox"><h2>Ultimele piese</h2><div id="hist"></div></div>
   <div class="links" id="links"></div>
 </div>
-<audio id="audio" preload="none"></audio>
+<audio id="audio" preload="none" crossorigin="anonymous"></audio>
+<script src="/static/viz.js"></script>
 <script>
 const slug = location.pathname.split("/")[2];
 const embed = location.pathname.startsWith("/embed/");
@@ -66,6 +68,8 @@ if (embed) document.body.classList.add("embed");
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const audio = $("audio");
+NtsViz.setCanvas($("viz"));
+NtsViz.onchange = () => showArt();
 let info = null, playing = false, lastTitle = null, logo = "", jingleUntil = 0, songCover = null, shown = null;
 const ICON_PLAY = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
 const ICON_STOP = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
@@ -77,11 +81,12 @@ function pickStream() {
   return (mp3 || s[0]).url;
 }
 $("play").onclick = () => {
-  if (playing) { audio.pause(); audio.removeAttribute("src"); audio.load(); playing = false; $("play").innerHTML = ICON_PLAY; return; }
+  if (playing) { audio.pause(); audio.removeAttribute("src"); audio.load(); playing = false; $("play").innerHTML = ICON_PLAY; showArt(); return; }
+  NtsViz.attach(audio);
   audio.src = pickStream() + "?t=" + Date.now();
   $("play").innerHTML = ICON_LOAD;
   audio.play().then(() => {
-    playing = true; $("play").innerHTML = ICON_STOP;
+    playing = true; $("play").innerHTML = ICON_STOP; showArt();
     if (info && info.intro_secs > 0) { jingleUntil = Date.now() + (info.intro_secs + 1.5) * 1000; showArt(); setTimeout(showArt, (info.intro_secs + 1.6) * 1000); }
   }).catch(() => { $("play").innerHTML = ICON_PLAY; });
 };
@@ -102,9 +107,14 @@ function showArt() {
   if (!info) return;
   const jingle = info.jingle || Date.now() < jingleUntil;
   const c = jingle ? info.jingle_image : (songCover || logo);
-  if (c === shown) return;
-  shown = c;
-  $("cover").src = c; $("bg").style.backgroundImage = `url("${c}")`;
+  // sigla implicită netstreaming.eu + analiză audio funcțională -> barele se mișcă pe muzică
+  const isDef = jingle ? info.jingle_image_default : (c === logo && info.logo_default);
+  const useViz = isDef && playing && NtsViz.active;
+  NtsViz.show(useViz);
+  const src = useViz ? info.viz_bg : c;
+  if (src === shown) return;
+  shown = src;
+  $("cover").src = src; $("bg").style.backgroundImage = `url("${c}")`;
   if ("mediaSession" in navigator) navigator.mediaSession.metadata = new MediaMetadata({title: jingle ? info.name : info.title, artist: info.name, artwork: [{src: c, sizes: "600x600"}]});
 }
 async function refresh() {
