@@ -5,7 +5,7 @@
 .st-card .meta{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px;margin-top:10px}
 .st-card .meta div:nth-child(odd){color:var(--text-muted)}
 .levels{display:grid;grid-template-columns:70px 1fr 70px;gap:6px 10px;align-items:center;font-size:12px;color:var(--text-muted);margin-top:12px}
-.out-row{display:grid;grid-template-columns:1.2fr 1fr 1fr auto;gap:8px;margin-bottom:8px}
+.out-row{display:grid;grid-template-columns:1.2fr 1fr 1fr auto auto;align-items:center;gap:8px;margin-bottom:8px}
 .drop{border:2px dashed var(--border);border-radius:10px;padding:18px;text-align:center;color:var(--text-muted);cursor:pointer}
 .drop.over{border-color:var(--accent);color:var(--text-primary)}
 .prog{height:4px;background:var(--surface-3);border-radius:2px;overflow:hidden;margin-top:8px}.prog div{height:100%;background:var(--accent);width:0}
@@ -236,7 +236,7 @@ async function loadDash() {
         ${st.relay && st.relay.state !== "off" ? `<div>Relay</div><div>${relayBadge(st.relay)} <span class="muted small" style="word-break:break-all">${esc(st.relay.url || "")}</span>${st.relay.input ? `<div class="small">${bufInfo(st.relay.input, true)}</div>` : ""}${st.relay.error ? `<div class="small" style="color:#ff8a8a">${esc(st.relay.error)}</div>` : ""}</div>` : ""}
         ${st.mixer && (st.mixer.late || st.mixer.resyncs) ? `<div>Mixer</div><div class="small" style="color:var(--warning)" title="serverul a fost prea ocupat și a trimis audio cu întârziere">⚠ ${st.mixer.late} întârzieri (max ${st.mixer.max_late_ms} ms)${st.mixer.resyncs ? ` · ${st.mixer.resyncs} resincronizări (audio pierdut)` : ""}</div>` : ""}
         ${st.pushes && st.pushes.length ? `<div>Retransmisii</div><div>${st.pushes.map(p => `<div class="small" style="margin-bottom:3px">${pushBadge(p)} <b>${esc(p.name)}</b> <span class="muted">${esc(p.type)} · ${esc(p.target || "")}${p.state === "connected" ? " · " + fmtDur(Date.now() / 1000 - p.since) + " · " + fmtBytes(p.bytes) : ""}</span>${p.error && p.state !== "connected" ? `<div style="color:#ff8a8a;word-break:break-word">${esc(p.error.slice(0, 160))}</div>` : ""}</div>`).join("")}</div>` : ""}
-        <div>Mounturi</div><div>${st.mounts.map(m => `<a href="${esc(m.mount)}" target="_blank">${esc(m.mount)}</a> <span class="muted">${m.codec.toUpperCase()} ${m.bitrate}k · ${m.listeners}</span>`).join(" &nbsp; ")}</div>
+        <div>Mounturi</div><div>${st.mounts.map(m => `<a href="${esc(m.mount)}" target="_blank">${esc(m.mount)}</a> <span class="muted">${m.codec.toUpperCase()} ${m.bitrate}k · ${m.listeners}</span>${m.passthrough ? (m.pt_active ? ` <span class="badge ok" title="sursa trimisă direct, fără recomprimare">direct ${esc(m.pt_status || "")}</span>` : m.pt_status ? ` <span class="badge off" title="passthrough indisponibil: ${esc(m.pt_status)}">recomprimat</span>` : "") : ""}`).join(" &nbsp; ")}</div>
       </div>
       <div class="row" style="margin-top:14px">
         ${A ? `<button class="btn sm" onclick="skip(${st.id})">⏭ Skip AutoDJ</button>` : ""}
@@ -272,7 +272,7 @@ async function loadStations() {
   $("#st-list").innerHTML = STATIONS.map(s => `<tr>
     <td><b>${esc(s.name)}</b><div class="muted small">${esc(s.genre || "")}</div></td>
     <td class="mono">/${esc(s.slug)}</td>
-    <td class="small">${s.outputs.map(o => `${o.codec.toUpperCase()} ${o.bitrate}k <span class="muted">/${esc(s.slug + o.mount)}</span>`).join("<br>")}</td>
+    <td class="small">${s.outputs.map(o => `${o.codec.toUpperCase()} ${o.bitrate}k <span class="muted">/${esc(s.slug + o.mount)}</span>${o.passthrough ? ' <span class="badge ok">direct</span>' : ""}`).join("<br>")}</td>
     <td>${s.enabled ? '<span class="badge ok">activ</span>' : '<span class="badge off">oprit</span>'}</td>
     <td class="small">studio${s.relay && s.relay.enabled ? " · relay" : ""}${s.autodj ? " · AutoDJ" : ""}${s.proc_mode && s.proc_mode !== "off" ? ` <span class="badge ok" title="Procesare audio">🎚 ${PROC_NAMES[s.proc_mode]}</span>` : ""}${s.pushes && s.pushes.length ? `<div class="muted">${s.pushes.length} retransmisi${s.pushes.length === 1 ? "e" : "i"}</div>` : ""}</td>
     <td class="right nowrap"><button class="btn sm" onclick="studioInfo(${s.id})">Date studio</button>
@@ -396,6 +396,7 @@ function outRow(o) {
   return `<div class="out-row"><input placeholder="sufix (gol = principal)" value="${esc(o.mount || "")}" data-k="mount">
     <select data-k="codec"><option value="mp3"${o.codec === "mp3" ? " selected" : ""}>MP3</option><option value="aac"${o.codec === "aac" ? " selected" : ""}>AAC</option></select>
     <select data-k="bitrate">${[32, 48, 64, 96, 128, 160, 192, 256, 320].map(b => `<option${+o.bitrate === b ? " selected" : ""}>${b}</option>`).join("")}</select>
+    <label class="chk small" title="Când studioul / relay-ul trimite deja în formatul acestui mount (MP3 sau AAC, 44,1 kHz stereo), stream-ul lui ajunge la ascultători exact cum vine – fără decodare și recomprimare, deci fără pierderi în plus. Procesarea audio nu se aplică pe sursa trimisă direct. AutoDJ-ul se encodează normal."><input type="checkbox" data-k="passthrough"${o.passthrough ? " checked" : ""}> direct</label>
     <button class="btn sm danger" type="button" onclick="this.parentNode.remove()">✕</button></div>`;
 }
 
@@ -511,7 +512,7 @@ async function editStation(id) {
       const body = {name: v("name"), slug: v("slug"), genre: v("genre"), website: v("website"), description: v("description"),
         source_pass: v("source_pass"), source_ips: v("source_ips"), intro: v("intro"), max_listeners: +v("max_listeners"), enabled: c("enabled"), autodj: c("autodj"), shuffle: c("shuffle"),
         crossfade: +v("crossfade"), jingle_every: +v("jingle_every"), silence_secs: +v("silence_secs"),
-        outputs: $$(".out-row", m).map(r => ({mount: $("[data-k=mount]", r).value.trim(), codec: $("[data-k=codec]", r).value, bitrate: +$("[data-k=bitrate]", r).value})),
+        outputs: $$(".out-row", m).map(r => ({mount: $("[data-k=mount]", r).value.trim(), codec: $("[data-k=codec]", r).value, bitrate: +$("[data-k=bitrate]", r).value, passthrough: $("[data-k=passthrough]", r).checked})),
         relay: {enabled: $("#e-relay-en", m).checked ? 1 : 0, url: $("#e-relay-url", m).value.trim(),
           schedule: $$("#e-sched .sched-row", m).map(r => ({days: $$(".days input:checked", r).map(x => +x.value), start: $("[data-k=start]", r).value, end: $("[data-k=end]", r).value}))},
         pushes: $$(".push-row", m).map(r => {
@@ -756,15 +757,27 @@ async function renderFiles(type) {
   box.innerHTML = `<div class="card-head"><h2>${type === "music" ? "Muzică" : "Jingle-uri"} <span class="muted">(${d.files.length})</span></h2><span class="muted small">${fmtBytes(total)} · liber ${fmtBytes(d.free)}</span></div>
     <div class="drop" data-drop>Trage fișierele aici sau <u>alege fișiere</u><br><span class="small">MP3, AAC, M4A, OGG, FLAC, WAV · se pot urca și prin SFTP în <span class="mono">${esc(d.dir)}</span></span><input type="file" multiple accept="audio/*,.mp3,.aac,.m4a,.ogg,.opus,.flac,.wav" class="hidden"></div>
     <div class="upl small"></div>
+    ${d.quality ? qualSummary(d.quality) : ""}
     <input placeholder="Caută..." class="flt" style="width:100%;margin:10px 0">
-    <div class="table-wrap" style="max-height:440px"><table><tbody>${d.files.map(f => `<tr data-n="${esc(f.name.toLowerCase())}"><td style="word-break:break-all">${esc(f.name)}</td><td class="num muted small nowrap">${fmtBytes(f.size)}</td><td class="right nowrap">${acts(f)}<button class="btn sm danger" data-del="${esc(f.name)}">✕</button></td></tr>`).join("") || `<tr><td class="empty">Niciun fișier încă.</td></tr>`}</tbody></table></div>`;
+    <div class="table-wrap" style="max-height:440px"><table><tbody>${d.files.map(f => `<tr data-n="${esc(f.name.toLowerCase())}" data-g="${f.q ? f.q.grade : "pending"}"><td style="word-break:break-all">${type === "music" ? qualBadge(f.q) : ""}${esc(f.name)}</td><td class="num muted small nowrap">${fmtBytes(f.size)}</td><td class="right nowrap">${acts(f)}<button class="btn sm danger" data-del="${esc(f.name)}">✕</button></td></tr>`).join("") || `<tr><td class="empty">Niciun fișier încă.</td></tr>`}</tbody></table></div>`;
   const drop = $("[data-drop]", box), inp = $("input[type=file]", box);
   drop.onclick = () => inp.click();
   inp.onchange = () => upload(type, [...inp.files], box);
   drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
   drop.ondragleave = () => drop.classList.remove("over");
   drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); upload(type, [...e.dataTransfer.files], box); };
-  $(".flt", box).oninput = e => { const q = e.target.value.toLowerCase(); $$("tr[data-n]", box).forEach(r => r.classList.toggle("hidden", !r.dataset.n.includes(q))); };
+  const applyFlt = () => {
+    const q = $(".flt", box).value.toLowerCase(), g = box.dataset.qf || "";
+    $$("tr[data-n]", box).forEach(r => r.classList.toggle("hidden", !r.dataset.n.includes(q) || (g && !g.split(",").includes(r.dataset.g))));
+  };
+  $(".flt", box).oninput = applyFlt;
+  $$("[data-qf]", box).forEach(b => b.onclick = () => {
+    box.dataset.qf = box.dataset.qf === b.dataset.qf ? "" : b.dataset.qf;
+    $$("[data-qf]", box).forEach(x => x.classList.toggle("on", x.dataset.qf === box.dataset.qf)); applyFlt();
+  });
+  clearTimeout(ADJ.qTimer);
+  if (d.quality && d.quality.pending) ADJ.qTimer = setTimeout(() => { if (!$("#t-autodj").classList.contains("hidden") && +$("#adj-st").value === id) renderFiles("music"); }, 20000);
+  if (box.dataset.qf) { $$("[data-qf]", box).forEach(x => x.classList.toggle("on", x.dataset.qf === box.dataset.qf)); applyFlt(); }
   $$("[data-pnow]", box).forEach(b => b.onclick = () => playNow(b.dataset.pnow));
   $$("[data-qnext]", box).forEach(b => b.onclick = async () => { await queueOp("POST", {path: b.dataset.qnext, where: "next"}); toast("Urmează: " + baseName(b.dataset.qnext)); });
   $$("[data-qend]", box).forEach(b => b.onclick = async () => { await queueOp("POST", {path: b.dataset.qend, where: "end"}); toast("Adăugat în coadă"); });
@@ -777,6 +790,23 @@ async function renderFiles(type) {
     if (!await confirmBox(`Ștergi „${b.dataset.del}”?`)) return;
     try { await api("DELETE", `/api/admin/stations/${id}/files?type=${type}&name=${encodeURIComponent(b.dataset.del)}`); renderFiles(type); } catch (e) { fail(e); }
   });
+}
+const Q_NAMES = {good: "bună", ok: "acceptabilă", poor: "slabă", bad: "foarte slabă", unknown: "nedeterminată"};
+const Q_COL = {good: "#3ecf8e", ok: "#9ccf3e", poor: "#f0a020", bad: "#ff5a5a", unknown: "#888"};
+function qualBadge(q) {
+  if (!q) return `<span class="qb" style="background:#444" title="în analiză..."></span>`;
+  const khz = q.cutoff ? (q.cutoff / 1000).toFixed(0) + " kHz" : "?";
+  const tip = `Calitate ${Q_NAMES[q.grade]} · înalte până la ~${khz} · ${(q.codec || "").toUpperCase()} ${q.br || "?"} kbps` +
+    (q.grade === "poor" || q.grade === "bad" ? " – probabil rip YouTube / 128 kbps; caută o sursă mai bună" : "");
+  return `<span class="qb" style="background:${Q_COL[q.grade]}" title="${esc(tip)}"></span>`;
+}
+function qualSummary(q) {
+  const c = q.counts || {};
+  const chip = (g, label) => c[g] ? `<button class="qchip" data-qf="${g}"><span class="qb" style="background:${Q_COL[g]}"></span>${c[g]} ${c[g] === 1 ? Q_NAMES[g] : label}</button>` : "";
+  const bad = (c.poor || 0) + (c.bad || 0);
+  return `<div class="qsum small">Calitate: ${chip("good", "bune")}${chip("ok", "acceptabile")}${chip("poor", "slabe")}${chip("bad", "foarte slabe")}${chip("unknown", "nedeterminate")}
+    ${bad ? `<button class="qchip" data-qf="poor,bad">⚠ ${bad === 1 ? "arată doar piesa slabă" : `arată doar cele ${bad} slabe`}</button>` : ""}
+    ${q.pending ? `<span class="muted">· ${q.pending} în analiză…</span>` : ""}</div>`;
 }
 async function upload(type, files, box) {
   const id = +$("#adj-st").value, out = $(".upl", box);

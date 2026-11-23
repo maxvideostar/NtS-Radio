@@ -40,6 +40,8 @@ class Radio:
         self.cpu_prev = None
         from .recorder import Recorder
         self.recorder = Recorder(self)
+        from .quality import Quality
+        self.quality = Quality(self)
 
     # ------------------------------------------------------------------ pornire
     async def start(self):
@@ -56,6 +58,7 @@ class Radio:
         asyncio.create_task(self.snapshot_loop())
         asyncio.create_task(self.housekeeping_loop())
         self.recorder.start_all()
+        self.quality.start()
         await asyncio.gather(srv.server.serve_forever(), sc.serve_forever())
 
     def first_run(self):
@@ -963,7 +966,7 @@ class Radio:
             if mount in seen:
                 raise HTTPError(400, "Mounturi duplicate")
             seen.add(mount)
-            clean.append({"mount": mount, "codec": codec, "bitrate": br})
+            clean.append({"mount": mount, "codec": codec, "bitrate": br, "passthrough": bool(o.get("passthrough"))})
         if not clean:
             raise HTTPError(400, "Cel puțin o ieșire")
 
@@ -1684,7 +1687,17 @@ class Radio:
                         res.append({"name": os.path.relpath(fp, d), "size": stt.st_size, "mtime": int(stt.st_mtime)})
             res.sort(key=lambda x: x["name"].lower())
             free = shutil.disk_usage(d).free
-            return await send_json(w, {"files": res, "free": free, "dir": d})
+            qinfo = None
+            if kind == "music":
+                q = self.quality.for_station(cfg["id"])
+                cnt = {}
+                for r in res:
+                    qq = q.get(r["name"])
+                    if qq:
+                        r["q"] = {"grade": qq["grade"], "cutoff": qq["cutoff"], "br": qq["bitrate"], "codec": qq["codec"]}
+                        cnt[qq["grade"]] = cnt.get(qq["grade"], 0) + 1
+                qinfo = {"counts": cnt, "pending": sum(1 for r in res if "q" not in r), "busy": self.quality.busy}
+            return await send_json(w, {"files": res, "free": free, "dir": d, "quality": qinfo})
         name = req.query.get("name", "")
         if m == "POST":
             fname = safe_filename(name)

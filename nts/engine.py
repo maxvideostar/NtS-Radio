@@ -184,8 +184,11 @@ class Hub:
         self.burst = collections.deque()
         self.burst_bytes = 0
         self.burst_max = self.bitrate * 125 * 3          # ~3 secunde pentru pornire rapidă
-        self.max_backlog = self.bitrate * 125 * 30       # 30 s întârziere maximă la client
+        self.max_backlog = max(self.bitrate, 320) * 125 * 30   # 30 s întârziere maximă la client
         self.bytes_out = 0
+        self.passthrough = bool(out.get("passthrough"))     # trimite direct sursa studio/relay, fără recomprimare
+        self.pt_active = False
+        self.pt_status = None
 
     def count(self):
         return sum(1 for l in self.listeners.values() if not l.internal)
@@ -311,7 +314,8 @@ class Encoder:
                 data = await proc.stdout.read(8192)
                 if not data:
                     break
-                self.hub.feed(data)
+                if not self.hub.pt_active:          # în passthrough ieșirea encoderului e ignorată
+                    self.hub.feed(data)
         except Exception:
             pass
 
@@ -376,6 +380,106 @@ def stretch(data, out_frames):
 
 JITTER_DEFAULT_MS = 2000
 
+# ---------- parser de cadre MP3 / AAC-ADTS (pentru passthrough) ----------
+_MP3_BR = {  # (versiune1?, layer3) -> tabel kbps
+    True: [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0],
+    False: [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],
+}
+_MP3_SR = {3: [44100, 48000, 32000], 2: [22050, 24000, 16000], 0: [11025, 12000, 8000]}
+_AAC_SR = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350]
+
+
+def parse_frame(b, i, codec):
+    """întoarce (lungime, eșantioane, rată, canale, kbps) pentru cadrul de la poziția i, sau None"""
+    if len(b) - i < 7 or b[i] != 0xFF:
+        return None
+    h1, h2, h3 = b[i + 1], b[i + 2], b[i + 3]
+    if codec == "mp3":
+        if (h1 & 0xE0) != 0xE0:
+            return None
+        ver = (h1 >> 3) & 3            # 3 = MPEG1, 2 = MPEG2, 0 = MPEG2.5
+        layer = (h1 >> 1) & 3          # 1 = Layer III
+        if ver == 1 or layer != 1:
+            return None
+        bri, sri, pad = (h2 >> 4) & 15, (h2 >> 2) & 3, (h2 >> 1) & 1
+        if sri == 3 or bri in (0, 15):
+            return None
+        kbps = _MP3_BR[ver == 3][bri]
+        sr = _MP3_SR[ver][sri]
+        spf = 1152 if ver == 3 else 576
+        ln = (spf // 8) * kbps * 1000 // sr + pad
+        ch = 1 if (h3 >> 6) == 3 else 2
+        return ln, spf, sr, ch, kbps
+    if (h1 & 0xF6) != 0xF0:            # ADTS: sync 12 biți, layer 00
+        return None
+    sri = (h2 >> 2) & 15
+    if sri >= len(_AAC_SR):
+        return None
+    ch = ((h2 & 1) << 2) | (h3 >> 6)
+    ln = ((h3 & 3) << 11) | (b[i + 4] << 3) | (b[i + 5] >> 5)
+    if ln < 7:
+        return None
+    blocks = (b[i + 6] & 3) + 1
+    return ln, 1024 * blocks, _AAC_SR[sri], ch, 0
+
+
+class FrameQueue:
+    """cadrele comprimate ale sursei, eliberate în ritmul în care mixerul consumă PCM-ul decodat"""
+
+    def __init__(self, codec):
+        self.codec = codec
+        self.pend = bytearray()
+        self.q = collections.deque()       # (bytes, eșantioane)
+        self.samples = 0                   # eșantioane în coadă
+        self.credit = 0
+        self.fmt = None                    # (rată, canale, kbps)
+        self.out = []
+
+    def add(self, data):
+        b = self.pend
+        b += data
+        i, n = 0, len(b)
+        while i < n - 7:
+            f = parse_frame(b, i, self.codec)
+            if not f:
+                i += 1
+                continue
+            ln, spf, sr, ch, kbps = f
+            if i + ln > n:
+                break
+            nxt = parse_frame(b, i + ln, self.codec) if i + ln + 7 <= n else True
+            if nxt is None:                # sincronizare falsă -> căutăm mai departe
+                i += 1
+                continue
+            self.q.append((bytes(b[i:i + ln]), spf))
+            self.samples += spf
+            if kbps or self.fmt is None or self.fmt[:2] != (sr, ch):
+                self.fmt = (sr, ch, kbps or (self.fmt[2] if self.fmt else 0))
+            i += ln
+        del b[:i]
+        if len(b) > 65536:
+            b.clear()
+
+    def release(self, samples):
+        self.credit += samples
+        while self.q and self.credit >= self.q[0][1]:
+            fr, spf = self.q.popleft()
+            self.credit -= spf
+            self.samples -= spf
+            self.out.append(fr)
+
+    def sync(self, pcm_samples):
+        """aruncă cadrele vechi dacă coada comprimată a luat-o înaintea PCM-ului (după tăieri)"""
+        extra = self.samples - pcm_samples - SR // 2
+        while extra > 0 and self.q:
+            fr, spf = self.q.popleft()
+            self.samples -= spf
+            extra -= spf
+
+    def drain(self):
+        o, self.out = self.out, []
+        return b"".join(o)
+
 
 class LiveInput:
     def __init__(self, station, ip, agent, ctype, proto, headers):
@@ -406,6 +510,7 @@ class LiveInput:
         self.peak = 0
         self.kicked = False
         self.source_url = None
+        self.fq = None              # coada de cadre pentru passthrough (mp3 / aac)
         self.played = False         # a pornit deja redarea (după primul buffer)
         self.corr = 0               # corecție curentă de ceas (cadre / tick, + = accelerează)
         self.adjusted = 0           # secunde corectate total (informativ)
@@ -455,8 +560,33 @@ class LiveInput:
         except Exception:
             pass
 
+    def raw_codec(self):
+        if "mpeg" in self.ctype or "mp3" in self.ctype:
+            return "mp3"
+        if "aac" in self.ctype:
+            return "aac"
+        return None
+
+    def passthrough_ok(self, codec):
+        """(da/nu, motiv) – sursa poate fi trimisă direct pe un mount cu acest codec?"""
+        fq = self.fq
+        if fq is None or fq.codec != codec:
+            return False, "format diferit"
+        if not fq.fmt:
+            return False, "așteaptă date"
+        sr, ch, kbps = fq.fmt
+        if sr != SR:
+            return False, f"sursa e {sr // 1000} kHz (trebuie 44,1 kHz)"
+        if ch != CH:
+            return False, "sursa e mono"
+        return True, f"{kbps} kbps" if kbps else "activ"
+
     async def feed(self, data):
         self.bytes_in += len(data)
+        if self.fq is None and self.raw_codec():
+            self.fq = FrameQueue(self.raw_codec())
+        if self.fq is not None:
+            self.fq.add(data)
         p = self.proc
         if p is None or p.returncode is not None:
             raise ConnectionError("decoder oprit")
@@ -481,7 +611,12 @@ class LiveInput:
             else:
                 return None
         frames = n // 4
+        fq = self.fq
+        if fq is not None:
+            fq.sync(len(self.buf) // 4)
         if len(self.buf) < n + 64:
+            if fq is not None:
+                fq.release(len(self.buf) // 4)
             self.underruns += 1
             self.ready = False              # reumplem până la țintă (nu doar 0,5 s) ca să nu se repete
             data = bytes(self.buf[:n]).ljust(n, b"\x00")
@@ -502,6 +637,8 @@ class LiveInput:
             k = 8                                             # 0,36 % – tot inaudibil pe muzică
         k = k if err > 0 else -k
         self.corr = k
+        if fq is not None:
+            fq.release(frames + k)
         if k == 0:
             data = bytes(self.buf[:n])
             del self.buf[:n]
@@ -1366,6 +1503,22 @@ class Station:
                 if fade > 0:
                     fade -= 1
                 self.out_peak = max(int(self.out_peak * 0.8), peak(data))
+                # passthrough: cadrele originale ale sursei, eliberate în ritmul PCM-ului consumat
+                raw = {}
+                for nm, inp in (("live", live), ("relay", relay)):
+                    if inp is not None and inp.fq is not None:
+                        raw[nm] = inp.fq.drain()
+                src = live if mode == "live" else relay if mode == "relay" else None
+                for e in self.encoders:
+                    h = e.hub
+                    use = False
+                    if h.passthrough and src is not None and src.fq is not None:
+                        use, h.pt_status = src.passthrough_ok(h.codec)
+                    else:
+                        h.pt_status = None
+                    h.pt_active = use
+                    if use and raw.get(mode):
+                        h.feed(raw[mode])
                 for e in self.encoders:
                     await e.write(data)
             except asyncio.CancelledError:
@@ -1427,7 +1580,8 @@ class Station:
     def status(self):
         st = {"id": self.id, "slug": self.slug, "name": self.cfg["name"], "mode": self.mode, "title": self.title,
               "listeners": self.listener_count(), "max_listeners": self.cfg.get("max_listeners"),
-              "mounts": [{"mount": h.mount, "codec": h.codec, "bitrate": h.bitrate, "listeners": h.count()}
+              "mounts": [{"mount": h.mount, "codec": h.codec, "bitrate": h.bitrate, "listeners": h.count(),
+                          "passthrough": h.passthrough, "pt_active": h.pt_active, "pt_status": h.pt_status}
                          for h in self.hubs.values()],
               "live": self.live.info() if self.live else None,
               "autodj": self.autodj.info() if self.cfg.get("autodj", 1) else None,

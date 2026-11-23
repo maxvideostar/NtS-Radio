@@ -120,3 +120,7 @@ label.chk{display:flex;gap:8px;align-items:center;color:var(--text-secondary);cu
 .eq-band span{font-size:11px;color:var(--muted,#888)}
 .eq-band input[type=range]{writing-mode:vertical-lr;direction:rtl;width:26px;height:170px;margin:0;accent-color:var(--accent,#4f8cff)}
 .eq-pre{border-right:1px solid var(--border,#333);padding-right:8px;margin-right:4px}
+.qb{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:middle;flex:none}
+.qsum{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px}
+.qchip{background:transparent;border:1px solid var(--border,#333);color:inherit;border-radius:999px;padding:3px 9px;cursor:pointer;font-size:12px}
+.qchip.on{border-color:var(--accent,#4f8cff);background:rgba(79,140,255,.12)}
