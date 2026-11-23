@@ -156,6 +156,7 @@
           <label class="f">Adresă publică (pentru linkuri player / m3u / embed)<input id="s-public_url" placeholder="https://radio.domeniu.ro  (gol = automat)"></label>
           <label class="f">Fus orar statistici<input id="s-timezone" placeholder="Europe/Bucharest"></label>
           <label class="f">Păstrează statisticile (zile)<input id="s-retention_days" type="number" min="30"></label>
+          <label class="f">Buffer recepție studio / relay (ms) – mai mare = rezistă la rețea instabilă, dar cu întârziere mai mare. Implicit 2000. Se aplică la următoarea conectare a sursei.<input id="s-jitter_ms" type="number" min="250" max="10000" step="250"></label>
           <div class="row"><button class="btn primary" id="s-save">Salvează</button></div>
         </div>
         <h2 style="margin-top:24px">Alerte Telegram</h2>
@@ -230,9 +231,10 @@ async function loadDash() {
         <span>Ieșire</span><div class="meter"><div style="width:${dbToPct(st.out_peak_db)}%"></div></div><span class="mono">${st.out_peak_db} dB</span>
       </div>
       <div class="meta">
-        <div>Studio</div><div>${L ? `<span class="badge ok">conectat</span> ${esc(L.ip)} · ${esc(L.agent)} · ${esc(L.proto)}${L.bitrate ? " · " + esc(L.bitrate) + " kbps" : ""} · de ${fmtDur(Date.now() / 1000 - L.since)}${L.silent ? ' · <b style="color:var(--warning)">⚠ liniște</b>' : ""}${L.underruns ? ` · <span title="întreruperi scurte ale conexiunii studioului">${L.underruns} sughițări</span>` : ""}` : '<span class="badge off">neconectat</span>'}</div>
+        <div>Studio</div><div>${L ? `<span class="badge ok">conectat</span> ${esc(L.ip)} · ${esc(L.agent)} · ${esc(L.proto)}${L.bitrate ? " · " + esc(L.bitrate) + " kbps" : ""} · de ${fmtDur(Date.now() / 1000 - L.since)}${L.silent ? ' · <b style="color:var(--warning)">⚠ liniște</b>' : ""}${bufInfo(L)}` : '<span class="badge off">neconectat</span>'}</div>
         ${A ? `<div>AutoDJ</div><div>${fmtN(A.files)} piese, ${fmtN(A.jingles)} jingle-uri${A.next ? ` · urmează: <i>${esc(A.next)}</i>` : ""}</div>` : `<div>AutoDJ</div><div class="muted">dezactivat</div>`}
-        ${st.relay && st.relay.state !== "off" ? `<div>Relay</div><div>${relayBadge(st.relay)} <span class="muted small" style="word-break:break-all">${esc(st.relay.url || "")}</span>${st.relay.error ? `<div class="small" style="color:#ff8a8a">${esc(st.relay.error)}</div>` : ""}</div>` : ""}
+        ${st.relay && st.relay.state !== "off" ? `<div>Relay</div><div>${relayBadge(st.relay)} <span class="muted small" style="word-break:break-all">${esc(st.relay.url || "")}</span>${st.relay.input ? `<div class="small">${bufInfo(st.relay.input, true)}</div>` : ""}${st.relay.error ? `<div class="small" style="color:#ff8a8a">${esc(st.relay.error)}</div>` : ""}</div>` : ""}
+        ${st.mixer && (st.mixer.late || st.mixer.resyncs) ? `<div>Mixer</div><div class="small" style="color:var(--warning)" title="serverul a fost prea ocupat și a trimis audio cu întârziere">⚠ ${st.mixer.late} întârzieri (max ${st.mixer.max_late_ms} ms)${st.mixer.resyncs ? ` · ${st.mixer.resyncs} resincronizări (audio pierdut)` : ""}</div>` : ""}
         ${st.pushes && st.pushes.length ? `<div>Retransmisii</div><div>${st.pushes.map(p => `<div class="small" style="margin-bottom:3px">${pushBadge(p)} <b>${esc(p.name)}</b> <span class="muted">${esc(p.type)} · ${esc(p.target || "")}${p.state === "connected" ? " · " + fmtDur(Date.now() / 1000 - p.since) + " · " + fmtBytes(p.bytes) : ""}</span>${p.error && p.state !== "connected" ? `<div style="color:#ff8a8a;word-break:break-word">${esc(p.error.slice(0, 160))}</div>` : ""}</div>`).join("")}</div>` : ""}
         <div>Mounturi</div><div>${st.mounts.map(m => `<a href="${esc(m.mount)}" target="_blank">${esc(m.mount)}</a> <span class="muted">${m.codec.toUpperCase()} ${m.bitrate}k · ${m.listeners}</span>`).join(" &nbsp; ")}</div>
       </div>
@@ -244,6 +246,14 @@ async function loadDash() {
         <a class="btn sm" href="/manager#${st.id}" target="_blank">Statistici ↗</a>
       </div></div>`;
   }).join("") + d.stopped.map(s => `<div class="card"><div class="card-head"><h2>${esc(s.name)}</h2><span class="badge off">dezactivat</span></div><p class="muted">Postul este oprit. Îl activezi din tab-ul Posturi.</p></div>`).join("");
+}
+function bufInfo(L, bare) {
+  if (L.buffer_ms === undefined) return "";
+  const pct = Math.min(100, L.buffer_ms / Math.max(1, L.target_ms * 2) * 100);
+  const bad = L.underruns > 0;
+  return `${bare ? "" : " · "}<span title="buffer de recepție: ${L.buffer_ms} ms / țintă ${L.target_ms} ms · corecție de ceas totală ${L.drift_ms} ms">buffer <span class="meter" style="display:inline-block;width:60px;height:6px;vertical-align:middle"><div style="width:${pct}%"></div></span> ${(L.buffer_ms / 1000).toFixed(1)} s</span>` +
+    (bad ? ` · <b style="color:var(--warning)" title="bufferul s-a golit – rețeaua sursei a avut întreruperi mai lungi decât bufferul">${L.underruns} goluri</b>` : ` · <span class="muted">0 goluri</span>`) +
+    (L.trims ? ` · <b style="color:var(--warning)">${L.trims} tăieri</b>` : "");
 }
 function relayBadge(r) {
   return r.state === "connected" ? `<span class="badge ok">conectat</span>` : r.state === "connecting" ? `<span class="badge autodj">conectare...</span>` :
@@ -1025,12 +1035,12 @@ $("#ev-refresh").onclick = loadEvents;
 /* ================= SETĂRI ================= */
 async function loadSettings() {
   const s = await api("GET", "/api/admin/settings");
-  ["public_url", "timezone", "telegram_token", "telegram_chat", "retention_days"].forEach(k => $("#s-" + k).value = s[k] || "");
+  ["public_url", "timezone", "telegram_token", "telegram_chat", "retention_days", "jitter_ms"].forEach(k => $("#s-" + k).value = s[k] || "");
   $("#geo-status").textContent = s.geoip_age_days == null ? "Baza GeoIP nu este încă descărcată (țările vor apărea ca „Necunoscut”)." : `Baza GeoIP actualizată acum ${Math.round(s.geoip_age_days)} zile.`;
 }
 async function saveSettings() {
   const b = {};
-  ["public_url", "timezone", "telegram_token", "telegram_chat", "retention_days"].forEach(k => b[k] = $("#s-" + k).value);
+  ["public_url", "timezone", "telegram_token", "telegram_chat", "retention_days", "jitter_ms"].forEach(k => b[k] = $("#s-" + k).value);
   try { await api("PUT", "/api/admin/settings", b); toast("Setări salvate"); } catch (e) { fail(e); }
 }
 $("#s-save").onclick = saveSettings; $("#s-save2").onclick = saveSettings;

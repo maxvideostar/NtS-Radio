@@ -353,6 +353,30 @@ class Encoder:
 # ======================================================================
 #  Sursa live (studio)
 # ======================================================================
+def stretch(data, out_frames):
+    """resampling liniar s16le stereo: n cadre -> out_frames cadre (corecție fină de ceas, inaudibilă)"""
+    a = array("h")
+    a.frombytes(data)
+    nin = len(a) // 2
+    if nin == out_frames or nin < 2:
+        return data[:out_frames * 4].ljust(out_frames * 4, b"\x00")
+    out = array("h", bytes(out_frames * 4))
+    step = (nin - 1) / (out_frames - 1)
+    for i in range(out_frames):
+        pos = i * step
+        j = int(pos)
+        f = pos - j
+        if j >= nin - 1:
+            j, f = nin - 2, 1.0
+        l0, r0, l1, r1 = a[2 * j], a[2 * j + 1], a[2 * j + 2], a[2 * j + 3]
+        out[2 * i] = int(l0 + (l1 - l0) * f)
+        out[2 * i + 1] = int(r0 + (r1 - r0) * f)
+    return out.tobytes()
+
+
+JITTER_DEFAULT_MS = 2000
+
+
 class LiveInput:
     def __init__(self, station, ip, agent, ctype, proto, headers):
         self.station = station
@@ -382,6 +406,15 @@ class LiveInput:
         self.peak = 0
         self.kicked = False
         self.source_url = None
+        self.played = False         # a pornit deja redarea (după primul buffer)
+        self.corr = 0               # corecție curentă de ceas (cadre / tick, + = accelerează)
+        self.adjusted = 0           # secunde corectate total (informativ)
+        self.trims = 0
+        try:
+            ms = int(station.radio.db.get_setting("jitter_ms", "") or JITTER_DEFAULT_MS)
+        except Exception:
+            ms = JITTER_DEFAULT_MS
+        self.target = max(BPS // 4, min(BPS * 10, BPS * ms // 1000)) // 4 * 4
 
     async def start(self):
         fmt = []
@@ -401,7 +434,7 @@ class LiveInput:
     async def start_url(self, url):
         """ffmpeg citește direct o adresă (HLS)"""
         args = [FFMPEG, "-hide_banner", "-loglevel", "error", "-reconnect", "1", "-reconnect_streamed", "1",
-                "-reconnect_delay_max", "10", "-user_agent", "NtS-Radio/1.0", "-i", url, "-vn",
+                "-reconnect_delay_max", "10", "-user_agent", "NtS-Radio/1.0", "-re", "-i", url, "-vn",
                 "-f", "s16le", "-ar", str(SR), "-ac", str(CH), "pipe:1"]
         self.proc = await asyncio.create_subprocess_exec(*args, stdin=asyncio.subprocess.DEVNULL,
                                                          stdout=asyncio.subprocess.PIPE,
@@ -416,8 +449,9 @@ class LiveInput:
                     break
                 self.buf += data
                 self.last_data = time.time()
-                if len(self.buf) > BPS * 3:                 # limitează întârzierea la ~1 s
-                    del self.buf[:len(self.buf) - BPS]
+                if len(self.buf) > self.target + BPS * 12:   # avarie (sursa a trimis mult prea mult) -> tăiem
+                    del self.buf[:len(self.buf) - self.target]
+                    self.trims += 1
         except Exception:
             pass
 
@@ -436,22 +470,47 @@ class LiveInput:
             self.active = False
             return None
         if not self.ready:
-            if len(self.buf) >= BPS // 2:
+            if len(self.buf) >= self.target:
+                if not self.played and len(self.buf) > self.target + BPS // 2:
+                    del self.buf[:len(self.buf) - self.target]     # burst-ul inițial al serverului: pornim la țintă
                 self.ready = True
                 self.active = True
+                self.played = True
             elif self.active:
-                return b"\x00" * n          # rebuffer scurt: nu sărim pe AutoDJ pentru o sughițare
+                return b"\x00" * n          # rebuffer: nu sărim pe AutoDJ pentru o sughițare
             else:
                 return None
-        if len(self.buf) < n:
+        frames = n // 4
+        if len(self.buf) < n + 64:
             self.underruns += 1
-            self.ready = False
-            data = bytes(self.buf) + b"\x00" * (n - len(self.buf))
+            self.ready = False              # reumplem până la țintă (nu doar 0,5 s) ca să nu se repete
+            data = bytes(self.buf[:n]).ljust(n, b"\x00")
             self.buf.clear()
             return data
-        data = bytes(self.buf[:n])
-        del self.buf[:n]
-        return data
+        # corecție de ceas: bufferul peste țintă -> consumăm puțin mai mult; sub țintă -> puțin mai puțin
+        err = (len(self.buf) - self.target) / BPS            # secunde
+        a = abs(err)
+        if a < 0.15:
+            k = 0
+        elif self.corr == 0 and a < 0.4:                      # histerezis: pornim corecția doar peste 0,4 s
+            k = 0
+        elif a < 1.0:
+            k = 1                                             # 0,045 % – complet inaudibil
+        elif a < 3.0:
+            k = 3
+        else:
+            k = 8                                             # 0,36 % – tot inaudibil pe muzică
+        k = k if err > 0 else -k
+        self.corr = k
+        if k == 0:
+            data = bytes(self.buf[:n])
+            del self.buf[:n]
+            return data
+        take = (frames + k) * 4
+        chunk = bytes(self.buf[:take])
+        del self.buf[:take]
+        self.adjusted += k / SR
+        return stretch(chunk, frames)
 
     def usable(self, silence_secs):
         if not self.active or self.closed:
@@ -501,6 +560,8 @@ class LiveInput:
         return {"ip": self.ip, "agent": self.agent, "proto": self.proto, "url": self.source_url, "ctype": self.ctype, "name": self.name,
                 "bitrate": self.bitrate, "since": int(self.connected_at), "bytes_in": self.bytes_in,
                 "ready": self.ready, "silent": self.silent, "underruns": self.underruns,
+                "buffer_ms": int(len(self.buf) * 1000 / BPS), "target_ms": int(self.target * 1000 / BPS),
+                "drift_ms": int(self.adjusted * 1000), "trims": self.trims,
                 "peak_db": peak_db(self.peak)}
 
 
@@ -1033,6 +1094,10 @@ class Station:
         self.relay_task = None
         self.pushes = []
         self.proc = self.load_proc()
+        self.late_ticks = 0
+        self.max_late = 0.0
+        self.late_logged = 0
+        self.resyncs = 0
 
     def load_proc(self):
         try:
@@ -1256,8 +1321,16 @@ class Station:
                 delay = t_next - time.monotonic()
                 if delay > 0:
                     await asyncio.sleep(delay)
-                elif delay < -1.0:          # am rămas mult în urmă (sistem încărcat) -> resincronizare
-                    t_next = time.monotonic()
+                else:
+                    if delay < -0.25:
+                        self.late_ticks += 1
+                        self.max_late = max(self.max_late, -delay)
+                        if time.time() - self.late_logged > 60:
+                            self.late_logged = time.time()
+                            log(f"mixerul a rămas în urmă {int(-delay * 1000)} ms (server încărcat?)", "warn", self.slug)
+                    if delay < -2.0:        # foarte mult în urmă -> resincronizare (se pierde audio)
+                        t_next = time.monotonic()
+                        self.resyncs += 1
                 silence_secs = int(self.cfg.get("silence_secs") or 0)
                 data = None
                 mode = None
@@ -1361,6 +1434,7 @@ class Station:
               "relay": dict(self.relay_status, **({"input": self.relay.info()} if self.relay else {})),
               "pushes": [p.info() for p in self.pushes],
               "out_peak_db": peak_db(self.out_peak), "running": self.running,
+              "mixer": {"late": self.late_ticks, "max_late_ms": int(self.max_late * 1000), "resyncs": self.resyncs},
               "peak_today": self.peak_today[1]}
         return st
 

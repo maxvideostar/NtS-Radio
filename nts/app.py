@@ -1304,9 +1304,10 @@ class Radio:
                              f"{where} ORDER BY e.id DESC LIMIT 300", args)
             return await send_json(w, {"events": ev, "log": list(LOG)[-300:][::-1]})
         if seg == ["settings"]:
-            keys = ["public_url", "timezone", "telegram_token", "telegram_chat", "retention_days"]
+            keys = ["public_url", "timezone", "telegram_token", "telegram_chat", "retention_days", "jitter_ms"]
             if m == "GET":
                 res = {k: self.db.get_setting(k, "") for k in keys}
+                res["jitter_ms"] = res["jitter_ms"] or "2000"
                 res["timezone"] = res["timezone"] or "Europe/Bucharest"
                 res["retention_days"] = res["retention_days"] or "730"
                 res["geoip_age_days"] = self.geo.age_days()
@@ -1316,6 +1317,11 @@ class Radio:
             for k in keys:
                 if k in d:
                     v = str(d[k]).strip()
+                    if k == "jitter_ms":
+                        try:
+                            v = str(max(250, min(10000, int(float(v)))))
+                        except ValueError:
+                            v = "2000"
                     if k == "timezone":
                         try:
                             ZoneInfo(v)
