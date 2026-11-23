@@ -505,11 +505,48 @@ class LiveInput:
 
 
 # ======================================================================
+#  Egalizator AutoDJ (10 benzi)
+# ======================================================================
+EQ_BANDS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+
+
+def eq_normalize(d):
+    d = d or {}
+    g = list(d.get("gains") or [])[:10]
+    g += [0] * (10 - len(g))
+    return {"enabled": bool(d.get("enabled")),
+            "preamp": _clamp(d.get("preamp"), -12, 12, 0),
+            "gains": [round(_clamp(x, -12, 12, 0), 1) for x in g],
+            "jingles": bool(d.get("jingles")),
+            "preset": str(d.get("preset") or "")[:30]}
+
+
+def eq_filter(d):
+    if not d or not d.get("enabled"):
+        return None
+    f = []
+    for i, (fr, g) in enumerate(zip(EQ_BANDS, d["gains"])):
+        if abs(g) < 0.05:
+            continue
+        if i == 0:
+            f.append(f"bass=g={g}:f={fr}:w=0.7")          # raft jos
+        elif i == 9:
+            f.append(f"treble=g={g}:f=12000:w=0.7")          # raft sus
+        else:
+            f.append(f"equalizer=f={fr}:t=o:w=1.2:g={g}")
+    if abs(d["preamp"]) >= 0.05:
+        f.append(f"volume={d['preamp']}dB")
+    return ",".join(f) or None
+
+
+# ======================================================================
 #  AutoDJ
 # ======================================================================
 class Track:
-    def __init__(self, path, jingle=False):
+    def __init__(self, path, jingle=False, af=None):
         self.path = path
+        self.af = af
+        self.gen = 0
         self.jingle = jingle
         self.title = os.path.splitext(os.path.basename(path))[0].replace("_", " ")
         self.duration = 0.0
@@ -534,11 +571,8 @@ class Track:
                 self.title = f"{artist} - {title}" if artist else title
         except Exception:
             pass
-        self.proc = await asyncio.create_subprocess_exec(
-            FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-i", self.path, "-vn",
-            "-f", "s16le", "-ar", str(SR), "-ac", str(CH), "pipe:1",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        self.task = asyncio.create_task(self._read())
+        self.proc = await self._spawn(0, self.af)
+        self.task = asyncio.create_task(self._read(self.proc, self.gen))
         # așteaptă primele date (max 5 s) ca să știm că fișierul e valid
         for _ in range(100):
             if len(self.buf) >= CHUNK or self.eof:
@@ -546,20 +580,76 @@ class Track:
             await asyncio.sleep(0.05)
         return len(self.buf) > 0
 
-    async def _read(self):
+    async def _spawn(self, pos, af):
+        args = [FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error"]
+        if pos > 0:
+            args += ["-ss", f"{pos:.3f}"]
+        args += ["-i", self.path, "-vn"]
+        if af:
+            args += ["-af", af]
+        args += ["-f", "s16le", "-ar", str(SR), "-ac", str(CH), "pipe:1"]
+        return await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE,
+                                                    stderr=asyncio.subprocess.DEVNULL)
+
+    async def _read(self, proc, gen):
         try:
-            while True:
+            while gen == self.gen:
                 if len(self.buf) > BPS * 4:
                     await asyncio.sleep(0.1)
                     continue
-                data = await self.proc.stdout.read(65536)
-                if not data:
+                data = await proc.stdout.read(65536)
+                if not data or gen != self.gen:
                     break
                 self.buf += data
         except Exception:
             pass
         finally:
-            self.eof = True
+            if gen == self.gen:
+                self.eof = True
+
+    async def set_filter(self, af):
+        if not hasattr(self, "_flock"):
+            self._flock = asyncio.Lock()
+        async with self._flock:          # schimbări rapide (slider) -> se aplică pe rând, ultima câștigă
+            await self._set_filter(af)
+
+    async def _set_filter(self, af):
+        """schimbă filtrul în timpul redării: redecodează din poziția curentă și înlocuiește bufferul"""
+        if af == self.af or self.proc is None or self.finished():
+            return
+        self.af = af
+        start = self.consumed + int(0.25 * BPS) // 4 * 4        # puțin în viitor
+        proc = await self._spawn(start / BPS, af)
+        nb = bytearray()
+        try:
+            while len(nb) < BPS:                                  # ~1 s gata decodat
+                data = await asyncio.wait_for(proc.stdout.read(65536), 5)
+                if not data:
+                    break
+                nb += data
+        except Exception:
+            pass
+        if not nb:
+            await kill_proc(proc)
+            return
+        now = self.consumed
+        if now >= start:                                          # am trecut deja de punct -> sărim surplusul
+            skip = (now - start) // 4 * 4
+            if skip >= len(nb):
+                await kill_proc(proc)
+                return
+            new = nb[skip:]
+        else:                                                     # păstrăm vechiul audio până la punct
+            new = self.buf[:start - now] + nb
+        old_proc = self.proc
+        self.gen += 1
+        self.eof = False
+        self.buf = bytearray(new)
+        self.proc = proc
+        if self.task:
+            self.task.cancel()
+        self.task = asyncio.create_task(self._read(proc, self.gen))
+        await kill_proc(old_proc)
 
     @property
     def remaining(self):
@@ -596,6 +686,7 @@ class AutoDJ:
         self.jingles = []
         self.fade_in = 0
         self.manual = []          # coadă manuală (căi absolute) – are prioritate
+        self.eq = self.load_eq()
         self.pl_sig = None
         self.pl_order = []
         self.pl_pos = 0
@@ -783,6 +874,23 @@ class AutoDJ:
         self.recent.append(f)
         return f, False
 
+    def load_eq(self):
+        try:
+            return eq_normalize(json.loads(self.station.radio.db.get_setting(f"eq:{self.station.id}", "") or "{}"))
+        except Exception:
+            return eq_normalize({})
+
+    def track_filter(self, jingle):
+        if jingle and not self.eq.get("jingles"):
+            return None
+        return eq_filter(self.eq)
+
+    async def set_eq(self, d):
+        self.eq = eq_normalize(d)
+        for t in (self.cur, self.next):
+            if t is not None:
+                await t.set_filter(self.track_filter(t.jingle))
+
     async def prepare(self):
         if self.preparing or self.next is not None:
             return
@@ -792,7 +900,7 @@ class AutoDJ:
                 path, jingle = self.pick()
                 if not path:
                     return
-                t = Track(path, jingle)
+                t = Track(path, jingle, self.track_filter(jingle))
                 t.from_manual = self.last_pick_src == "manual"
                 t.from_playlist = self.last_pick_src == "playlist"
                 ok = await t.open()

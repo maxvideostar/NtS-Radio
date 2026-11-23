@@ -62,6 +62,7 @@
       <label class="f">Post<select id="adj-st"></select></label>
       <div class="spacer"></div>
       <div id="adj-now" class="small"></div>
+      <button class="btn" id="adj-eq" onclick="eqEdit()">🎛 Egalizator <span id="eq-badge" class="muted small"></span></button>
       <button class="btn" id="adj-skip">⏭ Sari la următoarea piesă</button>
     </div></div>
     <div class="deck" id="deck">
@@ -271,6 +272,59 @@ async function loadStations() {
       <button class="btn sm danger" onclick="delStation(${s.id})">Șterge</button></td></tr>`).join("");
 }
 $("#addSt").onclick = () => editStation(null);
+/* ---------- egalizator AutoDJ ---------- */
+const EQ_PRESETS = {
+  "Plat":                [[0,0,0,0,0,0,0,0,0,0], 0],
+  "Bass Boost":          [[6,5,4,2,0,0,0,0,0,0], -4],
+  "Loudness (bas+înalte)":[[5,4,2,0,-1,-1,0,2,4,5], -4],
+  "Pop":                 [[-1,1,3,4,2,0,-1,-1,0,1], -3],
+  "Rock":                [[4,3,1,-1,-2,-1,1,3,4,4], -3],
+  "Dance":               [[5,4,1,0,-1,1,2,3,3,2], -4],
+  "Manele / Petrecere":  [[4,3,2,0,-1,0,2,3,2,1], -3],
+  "Voce clară":          [[-2,-2,-1,1,3,4,3,1,0,-1], -3],
+  "Înalte":              [[0,0,0,0,0,1,2,4,5,6], -4]};
+const EQ_LBL = ["31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"];
+async function eqBadge() {
+  const sid = $("#adj-st").value; if (!sid) return;
+  try { const r = await api("GET", `/api/admin/stations/${sid}/eq`); $("#eq-badge").textContent = r.eq.enabled ? "· " + (r.eq.preset || "personalizat") : ""; } catch (e) {}
+}
+async function eqEdit() {
+  const sid = $("#adj-st").value;
+  if (!sid) return toast("Alege un post", "err");
+  let r; try { r = await api("GET", `/api/admin/stations/${sid}/eq`); } catch (e) { return fail(e); }
+  const e = r.eq;
+  modal(`<h2>🎛 Egalizator AutoDJ</h2>
+    <p class="muted small">Se aplică doar muzicii din AutoDJ (nu studioului / relay-ului). Schimbările se aud imediat, inclusiv pe piesa curentă.</p>
+    <div class="row"><label class="chk"><input type="checkbox" id="eq-on" ${e.enabled ? "checked" : ""}> <b>Egalizator pornit</b></label>
+      <div class="spacer"></div>
+      <label class="f" style="min-width:200px">Preset<select id="eq-pre"><option value="">— personalizat —</option>${Object.keys(EQ_PRESETS).map(k => `<option ${e.preset === k ? "selected" : ""}>${k}</option>`).join("")}</select></label></div>
+    <div class="eq-wrap">
+      <div class="eq-band eq-pre"><b id="eqv-p">${e.preamp}</b><input type="range" orient="vertical" id="eq-p" min="-12" max="12" step="0.5" value="${e.preamp}"><span>Preamp</span></div>
+      ${e.gains.map((g, i) => `<div class="eq-band"><b id="eqv-${i}">${g}</b><input type="range" orient="vertical" id="eq-${i}" min="-12" max="12" step="0.5" value="${g}"><span>${EQ_LBL[i]}</span></div>`).join("")}
+    </div>
+    <div class="row small"><label class="chk"><input type="checkbox" id="eq-jg" ${e.jingles ? "checked" : ""}> Aplică și pe jingle-uri</label><div class="spacer"></div>
+      <span class="muted">dB · Ține preamp negativ când ridici benzi, ca să nu satureze.</span></div>
+    <div class="actions"><button class="btn" id="eq-reset">Resetează</button><div class="spacer"></div><button class="btn primary" data-close>Gata</button></div>`,
+  (m) => {
+    let t = 0;
+    const read = () => ({enabled: $("#eq-on", m).checked, jingles: $("#eq-jg", m).checked, preset: $("#eq-pre", m).value,
+      preamp: parseFloat($("#eq-p", m).value), gains: EQ_LBL.map((_, i) => parseFloat($("#eq-" + i, m).value))});
+    const save = () => { clearTimeout(t); t = setTimeout(async () => {
+      try { await api("PUT", `/api/admin/stations/${sid}/eq`, read()); eqBadge(); } catch (x) { fail(x); } }, 350); };
+    const setAll = (gains, pre) => {
+      gains.forEach((g, i) => { $("#eq-" + i, m).value = g; $("#eqv-" + i, m).textContent = g; });
+      $("#eq-p", m).value = pre; $("#eqv-p", m).textContent = pre;
+    };
+    $$(".eq-band input", m).forEach(inp => inp.oninput = () => {
+      $("#eqv-" + inp.id.slice(3), m).textContent = inp.value;
+      $("#eq-pre", m).value = ""; save();
+    });
+    $("#eq-pre", m).onchange = () => { const p = EQ_PRESETS[$("#eq-pre", m).value]; if (p) { setAll(p[0], p[1]); $("#eq-on", m).checked = true; } save(); };
+    $("#eq-on", m).onchange = save; $("#eq-jg", m).onchange = save;
+    $("#eq-reset", m).onclick = () => { setAll(EQ_PRESETS["Plat"][0], 0); $("#eq-pre", m).value = "Plat"; save(); };
+  });
+}
+
 /* ---------- procesare audio (compresor) ---------- */
 const PROC_NAMES = {off: "oprit", light: "ușor", medium: "mediu", strong: "puternic", custom: "personalizat"};
 const PROC_DESC = {
@@ -492,8 +546,8 @@ async function loadAutodj() {
   const sel = $("#adj-st"), prev = sel.value;
   sel.innerHTML = STATIONS.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
   if (prev) sel.value = prev;
-  sel.onchange = () => { ADJ.editPl = null; renderFiles("music"); renderFiles("jingles"); refreshAdjNow(true); };
-  renderFiles("music"); renderFiles("jingles"); refreshAdjNow(true);
+  sel.onchange = () => { ADJ.editPl = null; renderFiles("music"); renderFiles("jingles"); refreshAdjNow(true); eqBadge(); };
+  renderFiles("music"); renderFiles("jingles"); refreshAdjNow(true); eqBadge();
 }
 $("#adj-skip").onclick = () => skip(+$("#adj-st").value).then(() => setTimeout(refreshAdjNow, 600));
 

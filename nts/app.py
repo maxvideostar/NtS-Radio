@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 from . import VERSION, stats
 from .db import DB, DEFAULT_OUTPUTS
-from .engine import Station, LiveInput, Listener, proc_normalize, proc_filter, PROC_PRESETS
+from .engine import Station, LiveInput, Listener, proc_normalize, proc_filter, PROC_PRESETS, eq_normalize, eq_filter, EQ_BANDS
 from .geo import Geo
 from .httpd import HTTPError, Server, send, send_json, send_file, ChunkedReader
 from .util import LOG, log, now, hash_password, check_password, gen_password, slugify, safe_filename, decode_text
@@ -1162,7 +1162,7 @@ class Radio:
                 return await self.api_files(req, cfg, st)
             if rest == ["waveform"] and m == "GET":
                 return await self.api_waveform(req, cfg)
-            if rest and rest[0] in ("autodj", "queue", "play-now", "playlists", "schedule"):
+            if rest and rest[0] in ("autodj", "queue", "play-now", "playlists", "schedule", "eq"):
                 return await self.api_autodj(req, sid, cfg, st, rest)
         if seg[:1] == ["recordings"]:
             return await self.api_recordings(req, seg[1:])
@@ -1538,6 +1538,15 @@ class Radio:
                 "queue": q, "playlists": self._playlists(sid), "schedule": sched,
                 "default_playlist": int(cfg.get("default_playlist") or 0),
                 "active_playlist": {"id": active[0], "name": active[1]} if active[0] else None})
+        if what == "eq":
+            if m == "PUT":
+                e = eq_normalize(await req.json())
+                self.db.set_setting(f"eq:{sid}", json.dumps(e))
+                if adj:
+                    await adj.set_eq(e)
+                return await send_json(w, {"ok": True, "eq": e})
+            e = adj.eq if adj else eq_normalize(json.loads(self.db.get_setting(f"eq:{sid}", "") or "{}"))
+            return await send_json(w, {"eq": e, "bands": EQ_BANDS, "filter": eq_filter(e) or ""})
         if what == "queue":
             if not adj:
                 raise HTTPError(409, "Postul este oprit")
