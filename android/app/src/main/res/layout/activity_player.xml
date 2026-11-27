@@ -1,205 +1,269 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- Ecran identic cu player-ul web (/s/<post>) -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/bg_player"
-    android:gravity="center_horizontal"
-    android:orientation="vertical"
-    android:paddingHorizontal="28dp">
+    android:background="#0F1115">
 
-    <LinearLayout
+    <!-- fundal: coperta estompată și întunecată, ca .bgart -->
+    <ImageView
+        android:id="@+id/bgart"
         android:layout_width="match_parent"
-        android:layout_height="64dp"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
+        android:layout_height="match_parent"
+        android:alpha="0.35"
+        android:scaleType="centerCrop" />
 
-        <ImageButton
-            android:id="@+id/close"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Înapoi"
-            android:src="@drawable/ic_down" />
-
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:gravity="center"
-            android:text="SE ASCULTĂ ACUM"
-            android:letterSpacing="0.15"
-            android:textColor="@color/text2"
-            android:textSize="12sp"
-            android:textStyle="bold" />
-
-        <ImageButton
-            android:id="@+id/sleep"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="@string/sleep"
-            android:src="@drawable/ic_timer" />
-    </LinearLayout>
-
-    <Space
-        android:layout_width="1dp"
-        android:layout_height="0dp"
-        android:layout_weight="0.6" />
-
-    <com.google.android.material.card.MaterialCardView
+    <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        app:cardBackgroundColor="@color/surface"
-        app:cardCornerRadius="24dp"
-        app:cardElevation="12dp">
+        android:layout_height="match_parent"
+        android:fillViewport="true">
 
-        <FrameLayout
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content">
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingHorizontal="18dp"
+            android:paddingTop="28dp"
+            android:paddingBottom="28dp">
 
-            <eu.netstreaming.radio.SquareImageView
-                android:id="@+id/art"
+            <!-- antet: logo + nume + gen -->
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:scaleType="centerCrop"
-                android:src="@mipmap/ic_launcher" />
+                android:layout_marginBottom="22dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
 
-            <eu.netstreaming.radio.BarsView
-                android:id="@+id/bars"
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="52dp"
+                    android:layout_height="52dp"
+                    app:cardBackgroundColor="#222222"
+                    app:cardCornerRadius="12dp"
+                    app:cardElevation="0dp"
+                    app:strokeWidth="0dp">
+
+                    <ImageView
+                        android:id="@+id/logo"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:scaleType="centerCrop" />
+                </com.google.android.material.card.MaterialCardView>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/station"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:singleLine="true"
+                        android:textColor="#F2F2F0"
+                        android:textSize="20sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/genre"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:singleLine="true"
+                        android:textColor="#9A9CA3"
+                        android:textSize="13sp"
+                        android:visibility="gone" />
+                </LinearLayout>
+
+                <ImageButton
+                    android:id="@+id/sleep"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:alpha="0.7"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@string/sleep"
+                    android:src="@drawable/ic_timer" />
+
+                <ImageButton
+                    android:id="@+id/close"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:alpha="0.7"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Înapoi"
+                    android:src="@drawable/ic_down" />
+            </LinearLayout>
+
+            <!-- cardul player-ului -->
+            <LinearLayout
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:visibility="gone" />
-        </FrameLayout>
-    </com.google.android.material.card.MaterialCardView>
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_web_card"
+                android:elevation="16dp"
+                android:orientation="vertical"
+                android:padding="22dp">
 
-    <Space
-        android:layout_width="1dp"
-        android:layout_height="0dp"
-        android:layout_weight="0.5" />
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/coverCard"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    app:cardBackgroundColor="#222222"
+                    app:cardCornerRadius="14dp"
+                    app:cardElevation="0dp"
+                    app:strokeWidth="0dp">
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
+                    <FrameLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content">
 
-        <TextView
-            android:id="@+id/station"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:singleLine="true"
-            android:ellipsize="end"
-            android:textColor="@color/accent_light"
-            android:textSize="15sp"
-            android:textStyle="bold" />
+                        <eu.netstreaming.radio.SquareImageView
+                            android:id="@+id/art"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:scaleType="centerCrop" />
 
-        <TextView
-            android:id="@+id/live"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:background="@drawable/bg_live"
-            android:paddingHorizontal="10dp"
-            android:paddingVertical="3dp"
-            android:text="@string/live"
-            android:textColor="@color/live"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            android:visibility="gone" />
-    </LinearLayout>
+                        <eu.netstreaming.radio.BarsView
+                            android:id="@+id/bars"
+                            android:layout_width="match_parent"
+                            android:layout_height="match_parent"
+                            android:visibility="gone" />
+                    </FrameLayout>
+                </com.google.android.material.card.MaterialCardView>
 
-    <TextView
-        android:id="@+id/title"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="6dp"
-        android:ellipsize="marquee"
-        android:marqueeRepeatLimit="marquee_forever"
-        android:singleLine="true"
-        android:textColor="@color/text"
-        android:textSize="24sp"
-        android:textStyle="bold" />
+                <TextView
+                    android:id="@+id/title"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:layout_marginBottom="6dp"
+                    android:lineSpacingMultiplier="1.15"
+                    android:maxLines="3"
+                    android:ellipsize="end"
+                    android:minHeight="50dp"
+                    android:textColor="#F2F2F0"
+                    android:textSize="19sp"
+                    android:textStyle="bold" />
 
-    <TextView
-        android:id="@+id/status"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:singleLine="true"
-        android:textColor="@color/text2"
-        android:textSize="14sp" />
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
 
-    <Space
-        android:layout_width="1dp"
-        android:layout_height="0dp"
-        android:layout_weight="0.5" />
+                    <LinearLayout
+                        android:id="@+id/live"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="8dp"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:visibility="gone">
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center"
-        android:orientation="horizontal">
+                        <View
+                            android:id="@+id/liveDot"
+                            android:layout_width="8dp"
+                            android:layout_height="8dp"
+                            android:background="@drawable/dot_live" />
 
-        <ImageButton
-            android:id="@+id/prev"
-            android:layout_width="60dp"
-            android:layout_height="60dp"
-            android:background="@drawable/bg_round_btn"
-            android:contentDescription="Postul anterior"
-            android:src="@drawable/ic_prev" />
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:letterSpacing="0.04"
+                            android:text="LIVE"
+                            android:textColor="@color/live"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
 
-        <ImageButton
-            android:id="@+id/play"
-            android:layout_width="88dp"
-            android:layout_height="88dp"
-            android:layout_marginHorizontal="32dp"
-            android:background="@drawable/bg_play"
-            android:contentDescription="Play"
-            android:scaleType="center"
-            android:src="@drawable/ic_play" />
+                    <TextView
+                        android:id="@+id/status"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:singleLine="true"
+                        android:textColor="#9A9CA3"
+                        android:textSize="13sp" />
+                </LinearLayout>
 
-        <ImageButton
-            android:id="@+id/next"
-            android:layout_width="60dp"
-            android:layout_height="60dp"
-            android:background="@drawable/bg_round_btn"
-            android:contentDescription="Postul următor"
-            android:src="@drawable/ic_next" />
-    </LinearLayout>
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="28dp"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
+                    <ImageButton
+                        android:id="@+id/play"
+                        android:layout_width="64dp"
+                        android:layout_height="64dp"
+                        android:background="@drawable/bg_play"
+                        android:contentDescription="Play"
+                        android:padding="18dp"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/ic_play" />
 
-        <ImageView
-            android:layout_width="24dp"
-            android:layout_height="24dp"
-            android:src="@drawable/ic_volume"
-            app:tint="@color/text2" />
+                    <SeekBar
+                        android:id="@+id/volume"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="16dp"
+                        android:layout_weight="1"
+                        android:progressBackgroundTint="#FFFFFF"
+                        android:progressTint="@color/accent"
+                        android:thumbTint="@color/accent" />
+                </LinearLayout>
 
-        <SeekBar
-            android:id="@+id/volume"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:progressTint="@color/accent_light"
-            android:thumbTint="@color/text" />
-    </LinearLayout>
+                <TextView
+                    android:id="@+id/sleep_info"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:textColor="#9A9CA3"
+                    android:textSize="13sp"
+                    android:visibility="gone" />
+            </LinearLayout>
 
-    <TextView
-        android:id="@+id/sleep_info"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:textColor="@color/text2"
-        android:textSize="13sp" />
+            <!-- ultimele piese -->
+            <LinearLayout
+                android:id="@+id/histbox"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="22dp"
+                android:background="@drawable/bg_web_hist"
+                android:orientation="vertical"
+                android:paddingHorizontal="18dp"
+                android:paddingVertical="14dp"
+                android:visibility="gone">
 
-    <Space
-        android:layout_width="1dp"
-        android:layout_height="0dp"
-        android:layout_weight="0.6" />
-</LinearLayout>
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="8dp"
+                    android:letterSpacing="0.05"
+                    android:text="ULTIMELE PIESE"
+                    android:textColor="#9A9CA3"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:id="@+id/hist"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+            </LinearLayout>
+
+            <!-- formate stream (ca linkurile de jos din web) -->
+            <LinearLayout
+                android:id="@+id/links"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginTop="16dp"
+                android:orientation="horizontal" />
+        </LinearLayout>
+    </ScrollView>
+</FrameLayout>

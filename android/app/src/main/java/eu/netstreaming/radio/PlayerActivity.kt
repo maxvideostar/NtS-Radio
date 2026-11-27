@@ -6,7 +6,22 @@ import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.graphics.RenderEffect
+import android.graphics.Shader
+import android.os.Build
+import android.view.GestureDetector
+import android.view.MotionEvent
+import android.view.View
+import android.view.animation.AlphaAnimation
+import android.view.animation.Animation
 import android.widget.ImageButton
+import android.widget.LinearLayout
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import android.widget.ImageView
 import android.widget.SeekBar
 import android.widget.TextView
@@ -34,7 +49,16 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var station: TextView
     private lateinit var title: TextView
     private lateinit var status: TextView
-    private lateinit var live: TextView
+    private lateinit var live: View
+    private lateinit var logo: ImageView
+    private lateinit var genre: TextView
+    private lateinit var bgart: ImageView
+    private lateinit var hist: LinearLayout
+    private lateinit var histbox: View
+    private lateinit var links: LinearLayout
+    private var histSlug: String? = null
+    private var histAt = 0L
+    private var shownBg: String? = null
     private lateinit var play: ImageButton
     private lateinit var volume: SeekBar
     private lateinit var sleepInfo: TextView
@@ -66,15 +90,33 @@ class PlayerActivity : AppCompatActivity() {
         title = findViewById(R.id.title)
         status = findViewById(R.id.status)
         live = findViewById(R.id.live)
+        logo = findViewById(R.id.logo)
+        genre = findViewById(R.id.genre)
+        bgart = findViewById(R.id.bgart)
+        hist = findViewById(R.id.hist)
+        histbox = findViewById(R.id.histbox)
+        links = findViewById(R.id.links)
+        if (Build.VERSION.SDK_INT >= 31)
+            bgart.setRenderEffect(RenderEffect.createBlurEffect(120f, 120f, Shader.TileMode.CLAMP))
+        findViewById<View>(R.id.liveDot).startAnimation(AlphaAnimation(1f, 0.25f).apply {
+            duration = 600; repeatMode = Animation.REVERSE; repeatCount = Animation.INFINITE
+        })
+        // schimbarea postului: glisare stânga / dreapta pe copertă
+        val swipe = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent) = true
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
+                val dx = e2.x - (e1?.x ?: e2.x)
+                if (kotlin.math.abs(dx) > 120 && kotlin.math.abs(vx) > kotlin.math.abs(vy)) { skip(if (dx < 0) 1 else -1); return true }
+                return false
+            }
+        })
+        findViewById<View>(R.id.coverCard).setOnTouchListener { _, ev -> swipe.onTouchEvent(ev) }
         play = findViewById(R.id.play)
         volume = findViewById(R.id.volume)
         sleepInfo = findViewById(R.id.sleep_info)
-        title.isSelected = true
 
         findViewById<ImageButton>(R.id.close).setOnClickListener { finish() }
         findViewById<ImageButton>(R.id.sleep).setOnClickListener { sleepDialog() }
-        findViewById<ImageButton>(R.id.prev).setOnClickListener { skip(-1) }
-        findViewById<ImageButton>(R.id.next).setOnClickListener { skip(1) }
         play.setOnClickListener {
             val c = controller ?: return@setOnClickListener
             if (c.isPlaying || c.playbackState == Player.STATE_BUFFERING) c.stop()
@@ -138,10 +180,13 @@ class PlayerActivity : AppCompatActivity() {
         val t = c.mediaMetadata.title?.toString()?.takeIf { it.isNotBlank() } ?: stationName
         station.text = stationName
         title.text = t
-        live.visibility = if (st?.live == true) android.view.View.VISIBLE else android.view.View.GONE
+        live.visibility = if (st?.live == true) View.VISIBLE else View.GONE
+        if (st != null && st.genre.isNotBlank()) { genre.text = st.genre; genre.visibility = View.VISIBLE } else genre.visibility = View.GONE
+        if (logo.tag != st?.logo) ImageLoader.load(st?.logo, logo, R.mipmap.ic_launcher)
+        if (st != null && (st.slug != histSlug || System.currentTimeMillis() - histAt > 20000)) loadHistory(st)
         status.text = when {
             c.playbackState == Player.STATE_BUFFERING -> getString(R.string.connecting)
-            c.isPlaying -> st?.genre?.takeIf { it.isNotBlank() } ?: "În direct"
+            c.isPlaying -> if (st?.live == true) "În direct din studio" else "Muzică non-stop"
             else -> "Oprit"
         }
         val active = c.isPlaying || c.playbackState == Player.STATE_BUFFERING
@@ -166,6 +211,7 @@ class PlayerActivity : AppCompatActivity() {
 
     /** sigla implicită netstreaming.eu: imaginea originală pe stop, iar în redare fundal + bare live identice */
     private fun showArt(url: String?, logo: String?, st: Station?) {
+        if (url != shownBg) { shownBg = url; ImageLoader.load(url, bgart, android.R.color.transparent, keep = true) }
         val viz = st != null && st.logoDefault && st.vizBg.isNotBlank() && url == logo
         vizUrl = if (viz) st!!.vizBg else null
         ImageLoader.prefetch(vizUrl)
@@ -195,10 +241,75 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
+    /** „Ultimele piese” + formatele stream-ului, din /api/public/<post> (ca în player-ul web) */
+    private fun loadHistory(st: Station) {
+        histSlug = st.slug
+        histAt = System.currentTimeMillis()
+        val url = Stations.server(this) + "/api/public/" + st.slug
+        io.execute {
+            val j = try {
+                val c = URL(url).openConnection() as HttpURLConnection
+                c.connectTimeout = 8000; c.readTimeout = 10000
+                c.setRequestProperty("User-Agent", Stations.UA)
+                JSONObject(c.inputStream.bufferedReader().use { it.readText() }).also { c.disconnect() }
+            } catch (e: Exception) { null } ?: return@execute
+            val h = j.optJSONArray("history")
+            val streams = j.optJSONArray("streams")
+            val fmt = SimpleDateFormat("HH:mm", Locale.getDefault())
+            val rows = ArrayList<Pair<String, String>>()
+            if (h != null) for (i in 0 until h.length()) {
+                val o = h.getJSONObject(i)
+                rows.add(fmt.format(Date(o.optLong("ts") * 1000)) to o.optString("title"))
+            }
+            val chips = ArrayList<String>()
+            if (streams != null) for (i in 0 until streams.length()) {
+                val o = streams.getJSONObject(i)
+                chips.add("${o.optString("codec").uppercase()} ${o.optInt("bitrate")}k")
+            }
+            main.post { if (histSlug == st.slug) renderHistory(rows, chips) }
+        }
+    }
+
+    private fun renderHistory(rows: List<Pair<String, String>>, chips: List<String>) {
+        val d = resources.displayMetrics.density
+        hist.removeAllViews()
+        rows.forEachIndexed { i, (time, t) ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, (7 * d).toInt(), 0, (7 * d).toInt())
+            }
+            row.addView(TextView(this).apply {
+                text = time; textSize = 14f; setTextColor(0xFF9A9CA3.toInt())
+                fontFeatureSettings = "tnum"
+            })
+            row.addView(TextView(this).apply {
+                text = t; textSize = 14f; setTextColor(0xFFF2F2F0.toInt())
+                setPadding((12 * d).toInt(), 0, 0, 0)
+            })
+            hist.addView(row)
+            if (i < rows.size - 1) hist.addView(View(this).apply {
+                setBackgroundColor(0x0FFFFFFF)
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, maxOf(1, d.toInt()))
+            })
+        }
+        histbox.visibility = if (rows.isEmpty()) View.GONE else View.VISIBLE
+        links.removeAllViews()
+        chips.forEachIndexed { i, c ->
+            links.addView(TextView(this).apply {
+                text = c; textSize = 12f; setTextColor(0xFF9A9CA3.toInt())
+                setBackgroundResource(R.drawable.bg_web_chip)
+                setPadding((12 * d).toInt(), (6 * d).toInt(), (12 * d).toInt(), (6 * d).toInt())
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                    .apply { if (i > 0) marginStart = (10 * d).toInt() }
+            })
+        }
+    }
+
     private fun updateSleep() {
         val until = Stations.prefs(this).getLong("sleep_until", 0)
         val left = (until - System.currentTimeMillis()) / 1000
         sleepInfo.text = if (left > 0) "Se oprește în ${left / 60}:${"%02d".format(left % 60)}" else ""
+        sleepInfo.visibility = if (left > 0) View.VISIBLE else View.GONE
     }
 
     private fun sleepDialog() {
