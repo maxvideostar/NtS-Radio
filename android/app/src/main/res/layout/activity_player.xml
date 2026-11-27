@@ -54,12 +54,23 @@
         app:cardCornerRadius="24dp"
         app:cardElevation="12dp">
 
-        <eu.netstreaming.radio.SquareImageView
-            android:id="@+id/art"
+        <FrameLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:scaleType="centerCrop"
-            android:src="@mipmap/ic_launcher" />
+            android:layout_height="wrap_content">
+
+            <eu.netstreaming.radio.SquareImageView
+                android:id="@+id/art"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:scaleType="centerCrop"
+                android:src="@mipmap/ic_launcher" />
+
+            <eu.netstreaming.radio.BarsView
+                android:id="@+id/bars"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone" />
+        </FrameLayout>
     </com.google.android.material.card.MaterialCardView>
 
     <Space

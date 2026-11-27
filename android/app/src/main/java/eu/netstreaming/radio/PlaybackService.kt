@@ -15,7 +15,13 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import android.content.Context
+import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.audio.TeeAudioProcessor
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.extractor.metadata.icy.IcyInfo
@@ -60,7 +66,20 @@ class PlaybackService : MediaLibraryService() {
         val sources = DefaultMediaSourceFactory(DefaultDataSource.Factory(this, http))
             .setLoadErrorHandlingPolicy(DefaultLoadErrorHandlingPolicy(10))
 
-        player = ExoPlayer.Builder(this)
+        // analizorul pentru egalizatorul din sigla netstreaming.eu (vede sunetul redat, fără permisiuni)
+        val renderers = object : DefaultRenderersFactory(this) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean
+            ): AudioSink = DefaultAudioSink.Builder(context)
+                .setEnableFloatOutput(enableFloatOutput)
+                .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                .setAudioProcessors(arrayOf<AudioProcessor>(TeeAudioProcessor(Levels)))
+                .build()
+        }
+
+        player = ExoPlayer.Builder(this, renderers)
             .setMediaSourceFactory(sources)
             .setAudioAttributes(
                 AudioAttributes.Builder()

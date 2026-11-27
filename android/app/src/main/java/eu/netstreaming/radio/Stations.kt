@@ -19,6 +19,8 @@ data class Station(
     val listeners: Int,
     val logo: String,
     val streamUrl: String,
+    val logoDefault: Boolean = false,
+    val vizBg: String = "",
 )
 
 object Stations {
@@ -72,6 +74,8 @@ object Stations {
                         listeners = o.optInt("listeners"),
                         logo = o.optString("logo"),
                         streamUrl = best.optString("url"),
+                        logoDefault = o.optBoolean("logo_default"),
+                        vizBg = o.optString("viz_bg").takeIf { it != "null" } ?: "",
                     )
                 )
             }

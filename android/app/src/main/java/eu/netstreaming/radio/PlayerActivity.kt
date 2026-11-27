@@ -21,6 +21,7 @@ import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import java.util.concurrent.Executors
 
+@androidx.media3.common.util.UnstableApi
 class PlayerActivity : AppCompatActivity() {
 
     private var controllerFuture: ListenableFuture<MediaController>? = null
@@ -29,6 +30,7 @@ class PlayerActivity : AppCompatActivity() {
     private val main = Handler(Looper.getMainLooper())
     private lateinit var audio: AudioManager
     private lateinit var art: ImageView
+    private lateinit var bars: BarsView
     private lateinit var station: TextView
     private lateinit var title: TextView
     private lateinit var status: TextView
@@ -56,6 +58,7 @@ class PlayerActivity : AppCompatActivity() {
         setContentView(R.layout.activity_player)
         audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         art = findViewById(R.id.art)
+        bars = findViewById(R.id.bars)
         station = findViewById(R.id.station)
         title = findViewById(R.id.title)
         status = findViewById(R.id.status)
@@ -139,22 +142,30 @@ class PlayerActivity : AppCompatActivity() {
             else -> "Oprit"
         }
         val active = c.isPlaying || c.playbackState == Player.STATE_BUFFERING
+        bars.running = c.isPlaying
         play.setImageResource(if (active) R.drawable.ic_stop else R.drawable.ic_play)
 
         if (t != shownTitle) {
             shownTitle = t
             val logo = st?.logo ?: item.mediaMetadata.artworkUri?.toString()
-            if (shownArt == null) { ImageLoader.load(logo, art, R.mipmap.ic_launcher); shownArt = logo }
+            if (shownArt == null) { showArt(logo, logo, st); shownArt = logo }
             io.execute {
                 val cover = if (t != stationName) Covers.find(t) else null
                 main.post {
                     if (shownTitle == t) {
                         val u = cover ?: logo
-                        if (u != shownArt) { shownArt = u; ImageLoader.load(u, art, R.mipmap.ic_launcher) }
+                        if (u != shownArt) { shownArt = u; showArt(u, logo, st) }
                     }
                 }
             }
         }
+    }
+
+    /** sigla implicită netstreaming.eu -> fundal fără bare + egalizator live peste el */
+    private fun showArt(url: String?, logo: String?, st: Station?) {
+        val viz = st != null && st.logoDefault && st.vizBg.isNotBlank() && url == logo
+        bars.visibility = if (viz) android.view.View.VISIBLE else android.view.View.GONE
+        ImageLoader.load(if (viz) st!!.vizBg else url, art, R.mipmap.ic_launcher)
     }
 
     private fun updateSleep() {
