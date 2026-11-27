@@ -40,6 +40,9 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var sleepInfo: TextView
     private var shownTitle: String? = null
     private var shownArt: String? = null
+    private var vizUrl: String? = null        // sigla implicită pentru care avem egalizator
+    private var vizLogo: String? = null
+    private var vizOn = false
 
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) = update()
@@ -142,7 +145,7 @@ class PlayerActivity : AppCompatActivity() {
             else -> "Oprit"
         }
         val active = c.isPlaying || c.playbackState == Player.STATE_BUFFERING
-        bars.running = c.isPlaying
+        applyViz(c.isPlaying)
         play.setImageResource(if (active) R.drawable.ic_stop else R.drawable.ic_play)
 
         if (t != shownTitle) {
@@ -161,11 +164,35 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    /** sigla implicită netstreaming.eu -> fundal fără bare + egalizator live peste el */
+    /** sigla implicită netstreaming.eu: imaginea originală pe stop, iar în redare fundal + bare live identice */
     private fun showArt(url: String?, logo: String?, st: Station?) {
         val viz = st != null && st.logoDefault && st.vizBg.isNotBlank() && url == logo
-        bars.visibility = if (viz) android.view.View.VISIBLE else android.view.View.GONE
-        ImageLoader.load(if (viz) st!!.vizBg else url, art, R.mipmap.ic_launcher)
+        vizUrl = if (viz) st!!.vizBg else null
+        ImageLoader.prefetch(vizUrl)
+        vizLogo = url
+        vizOn = false
+        bars.running = false
+        bars.visibility = android.view.View.GONE
+        ImageLoader.load(url, art, R.mipmap.ic_launcher)
+        applyViz(controller?.isPlaying == true)
+    }
+
+    private fun applyViz(playing: Boolean) {
+        val on = playing && vizUrl != null
+        if (on == vizOn) return
+        vizOn = on
+        if (on) {
+            ImageLoader.load(vizUrl, art, R.mipmap.ic_launcher, keep = true) {
+                if (vizOn) {                      // barele apar doar după ce fundalul fără bare e afișat
+                    bars.visibility = android.view.View.VISIBLE
+                    bars.running = true
+                }
+            }
+        } else {
+            bars.running = false
+            bars.visibility = android.view.View.GONE
+            ImageLoader.load(vizLogo, art, R.mipmap.ic_launcher, keep = true)
+        }
     }
 
     private fun updateSleep() {
