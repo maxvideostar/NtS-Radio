@@ -22,8 +22,9 @@ from .util import log, now, decode_text, classify_ua
 SR = 44100
 CH = 2
 BPS = SR * CH * 2                     # bytes / secundă PCM
-CHUNK_MS = 100                        # tick mixer: 100 ms (mai puține scrieri / apeluri la multe posturi)
-CHUNK = BPS * CHUNK_MS // 1000        # 17640 bytes
+CHUNK_MS = 200                        # tick mixer: 200 ms (mai puține scrieri / apeluri la multe posturi)
+CHUNK = BPS * CHUNK_MS // 1000        # 35280 bytes
+ENC_IDLE_SECS = 15                    # encoderul unui mount fără ascultători se pune în pauză după 15 s
 AUDIO_EXT = {".mp3", ".aac", ".m4a", ".ogg", ".opus", ".flac", ".wav", ".wma", ".mp2"}
 SILENT_PEAK = 33                      # ~ -60 dBFS
 
@@ -146,7 +147,7 @@ class Listener:
     async def run(self):
         if self.intro:
             self.push(self.intro)      # jingle de întâmpinare, apoi direct emisia (fără burst)
-        else:
+        elif not self.hub.paused:      # burst-ul unui encoder oprit e vechi -> pornim direct cu emisia
             for b in list(self.hub.burst):
                 self.push(b)
         while not self.closed:
@@ -191,6 +192,12 @@ class Hub:
         self.passthrough = bool(out.get("passthrough"))     # trimite direct sursa studio/relay, fără recomprimare
         self.pt_active = False
         self.pt_status = None
+        self.paused = False                  # encoder în pauză (fără ascultători sau sursă trimisă direct)
+        self.idle_since = time.time()
+
+    def active(self):
+        """are cine să primească (ascultători, monitoare, înregistrări, retransmisii)?"""
+        return bool(self.listeners or self.taps)
 
     def count(self):
         return sum(1 for l in self.listeners.values() if not l.internal)
@@ -322,6 +329,19 @@ class Encoder:
             pass
 
     async def write(self, chunk):
+        h = self.hub
+        now = time.time()
+        if h.active():
+            h.idle_since = now
+        # pauză: nimeni nu ascultă de 15 s, sau sursa merge direct (passthrough) -> encoderul stă la 0 % CPU
+        if h.pt_active or (not h.active() and now - h.idle_since > ENC_IDLE_SECS):
+            if not h.paused:
+                h.paused = True
+            return
+        if h.paused:                        # repornire la primul ascultător: aruncăm burst-ul vechi
+            h.paused = False
+            h.burst.clear()
+            h.burst_bytes = 0
         p = self.proc
         if p is None or p.returncode is not None or p.stdin.is_closing():
             self.restarts += 1
@@ -1599,7 +1619,8 @@ class Station:
         st = {"id": self.id, "slug": self.slug, "name": self.cfg["name"], "mode": self.mode, "title": self.title,
               "listeners": self.listener_count(), "max_listeners": self.cfg.get("max_listeners"),
               "mounts": [{"mount": h.mount, "codec": h.codec, "bitrate": h.bitrate, "listeners": h.count(),
-                          "passthrough": h.passthrough, "pt_active": h.pt_active, "pt_status": h.pt_status}
+                          "passthrough": h.passthrough, "pt_active": h.pt_active, "pt_status": h.pt_status,
+                          "paused": h.paused}
                          for h in self.hubs.values()],
               "live": self.live.info() if self.live else None,
               "autodj": self.autodj.info() if self.cfg.get("autodj", 1) else None,
