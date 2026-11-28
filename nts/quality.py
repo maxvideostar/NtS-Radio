@@ -116,7 +116,23 @@ class Quality:
     def music_dir(self, slug):
         return os.path.join(self.radio.data_dir, "stations", slug, "music")
 
-    def pending(self):
+    @staticmethod
+    def _scan(d):
+        """parcurgerea discului – rulează într-un thread separat, nu blochează audio"""
+        res = []
+        for root, _, files in os.walk(d):
+            for f in files:
+                if os.path.splitext(f)[1].lower() not in AUDIO_EXT:
+                    continue
+                fp = os.path.join(root, f)
+                try:
+                    st = os.stat(fp)
+                except OSError:
+                    continue
+                res.append((os.path.relpath(fp, d), fp, st.st_size, int(st.st_mtime)))
+        return res
+
+    async def pending(self):
         """(station_id, rel, abs, size, mtime) pentru fișierele neanalizate / modificate"""
         out = []
         for cfg in self.db.stations():
@@ -126,20 +142,11 @@ class Quality:
             known = {r["path"]: r for r in self.db.all(
                 "SELECT path, size, mtime FROM file_quality WHERE station_id=?", (cfg["id"],))}
             seen = set()
-            for root, _, files in os.walk(d):
-                for f in files:
-                    if os.path.splitext(f)[1].lower() not in AUDIO_EXT:
-                        continue
-                    fp = os.path.join(root, f)
-                    rel = os.path.relpath(fp, d)
-                    seen.add(rel)
-                    try:
-                        st = os.stat(fp)
-                    except OSError:
-                        continue
-                    k = known.get(rel)
-                    if not k or k["size"] != st.st_size or k["mtime"] != int(st.st_mtime):
-                        out.append((cfg["id"], rel, fp, st.st_size, int(st.st_mtime)))
+            for rel, fp, size, mtime in await asyncio.to_thread(self._scan, d):
+                seen.add(rel)
+                k = known.get(rel)
+                if not k or k["size"] != size or k["mtime"] != mtime:
+                    out.append((cfg["id"], rel, fp, size, mtime))
             gone = set(known) - seen
             for g in gone:
                 self.db.conn.execute("DELETE FROM file_quality WHERE station_id=? AND path=?", (cfg["id"], g))
@@ -151,7 +158,7 @@ class Quality:
         await asyncio.sleep(20)
         while True:
             try:
-                todo = self.pending()
+                todo = await self.pending()
                 for sid, rel, fp, size, mtime in todo:
                     self.busy = rel
                     r = await self.analyze(fp)

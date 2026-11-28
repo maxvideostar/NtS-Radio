@@ -440,6 +440,13 @@ class FrameQueue:
         b += data
         i, n = 0, len(b)
         while i < n - 7:
+            if b[i] != 0xFF:                       # sărim rapid (în C) la următorul octet de sincronizare
+                j = b.find(b"\xff", i + 1)
+                if j < 0:
+                    i = n
+                    break
+                i = j
+                continue
             f = parse_frame(b, i, self.codec)
             if not f:
                 i += 1
@@ -456,9 +463,10 @@ class FrameQueue:
             if kbps or self.fmt is None or self.fmt[:2] != (sr, ch):
                 self.fmt = (sr, ch, kbps or (self.fmt[2] if self.fmt else 0))
             i += ln
-        del b[:i]
-        if len(b) > 65536:
+        del b[:min(i, len(b))]
+        if len(b) > 16384:                         # nu se sincronizează -> renunțăm la date, nu rescanăm la nesfârșit
             b.clear()
+            self.bad = getattr(self, "bad", 0) + 1
 
     def release(self, samples):
         self.credit += samples

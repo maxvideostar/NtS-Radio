@@ -59,6 +59,7 @@ class Radio:
         asyncio.create_task(self.housekeeping_loop())
         self.recorder.start_all()
         self.quality.start()
+        self.start_watchdog()
         await asyncio.gather(srv.server.serve_forever(), sc.serve_forever())
 
     def first_run(self):
@@ -184,6 +185,34 @@ class Radio:
         return None
 
     PANEL_PATHS = ("/", "/login", "/admin", "/manager")
+
+    def start_watchdog(self):
+        """detector de blocaje: dacă bucla principală stă > 0,7 s, scrie în jurnal linia de cod vinovată"""
+        import threading, sys, traceback
+        loop = asyncio.get_running_loop()
+        main_id = threading.main_thread().ident
+        state = {"beat": time.monotonic()}
+
+        def beat():
+            state["beat"] = time.monotonic()
+
+        def run():
+            reported = 0.0
+            while True:
+                time.sleep(0.25)
+                try:
+                    loop.call_soon_threadsafe(beat)
+                except RuntimeError:
+                    return
+                lag = time.monotonic() - state["beat"]
+                if lag > 0.7 and state["beat"] != reported:
+                    reported = state["beat"]
+                    fr = sys._current_frames().get(main_id)
+                    where = " <- ".join(f"{os.path.basename(f.filename)}:{f.lineno} {f.name}"
+                                        for f in reversed(traceback.extract_stack(fr)[-5:])) if fr else "?"
+                    log(f"BLOCAJ {int(lag * 1000)} ms – audio întrerupt pe toate posturile. Cauza: {where}", "warn")
+
+        threading.Thread(target=run, daemon=True, name="watchdog").start()
 
     def panel_blocked(self, req):
         """cu HTTPS configurat: panoul / login / API nu se servesc direct pe portul NtS-Radio (doar prin nginx)"""
