@@ -22,8 +22,8 @@ from .util import log, now, decode_text, classify_ua
 SR = 44100
 CH = 2
 BPS = SR * CH * 2                     # bytes / secundă PCM
-CHUNK_MS = 50
-CHUNK = BPS * CHUNK_MS // 1000        # 8820 bytes
+CHUNK_MS = 100                        # tick mixer: 100 ms (mai puține scrieri / apeluri la multe posturi)
+CHUNK = BPS * CHUNK_MS // 1000        # 17640 bytes
 AUDIO_EXT = {".mp3", ".aac", ".m4a", ".ogg", ".opus", ".flac", ".wav", ".wma", ".mp2"}
 SILENT_PEAK = 33                      # ~ -60 dBFS
 
@@ -49,10 +49,12 @@ def gain(a, g):
 
 
 def peak(a):
-    x = array("h"); x.frombytes(a)
+    """vârful aproximativ: 1 eșantion din 16 (feliere în C) – suficient pentru vumetru și detecția liniștii"""
+    x = array("h"); x.frombytes(a[:len(a) // 2 * 2])
     if not x:
         return 0
-    return max(max(x), -min(x))
+    y = x[::16]
+    return max(max(y), -min(y))
 
 
 def peak_db(p):
@@ -358,24 +360,25 @@ class Encoder:
 #  Sursa live (studio)
 # ======================================================================
 def stretch(data, out_frames):
-    """resampling liniar s16le stereo: n cadre -> out_frames cadre (corecție fină de ceas, inaudibilă)"""
-    a = array("h")
-    a.frombytes(data)
-    nin = len(a) // 2
-    if nin == out_frames or nin < 2:
+    """corecție fină de ceas: scoate / dublează câteva cadre stereo, distribuite uniform în bucată.
+    Doar tăieri și lipiri de bytes (C), fără calcul pe eșantioane – un cadru izolat la 44,1 kHz nu se aude."""
+    nin = len(data) // 4
+    d = out_frames - nin
+    if d == 0 or nin < 16:
         return data[:out_frames * 4].ljust(out_frames * 4, b"\x00")
-    out = array("h", bytes(out_frames * 4))
-    step = (nin - 1) / (out_frames - 1)
-    for i in range(out_frames):
-        pos = i * step
-        j = int(pos)
-        f = pos - j
-        if j >= nin - 1:
-            j, f = nin - 2, 1.0
-        l0, r0, l1, r1 = a[2 * j], a[2 * j + 1], a[2 * j + 2], a[2 * j + 3]
-        out[2 * i] = int(l0 + (l1 - l0) * f)
-        out[2 * i + 1] = int(r0 + (r1 - r0) * f)
-    return out.tobytes()
+    k = abs(d)
+    step = nin // (k + 1)
+    parts, pos = [], 0
+    for i in range(1, k + 1):
+        cut = i * step * 4
+        parts.append(data[pos:cut])
+        if d > 0:                       # dublăm cadrul de la punctul de tăiere
+            parts.append(data[cut:cut + 4])
+            pos = cut
+        else:                           # sărim un cadru
+            pos = cut + 4
+    parts.append(data[pos:])
+    return b"".join(parts)
 
 
 JITTER_DEFAULT_MS = 2000
@@ -630,6 +633,13 @@ class LiveInput:
             data = bytes(self.buf[:n]).ljust(n, b"\x00")
             self.buf.clear()
             return data
+        # surplus mare (după o întârziere a serverului) -> sărim direct la țintă, nu corectăm minute întregi
+        if len(self.buf) > self.target + BPS * 3:
+            drop = (len(self.buf) - self.target) // 4 * 4
+            del self.buf[:drop]
+            if fq is not None:
+                fq.sync(len(self.buf) // 4)
+            self.trims += 1
         # corecție de ceas: bufferul peste țintă -> consumăm puțin mai mult; sub țintă -> puțin mai puțin
         err = (len(self.buf) - self.target) / BPS            # secunde
         a = abs(err)
